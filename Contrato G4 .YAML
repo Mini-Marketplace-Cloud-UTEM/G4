@@ -1,0 +1,863 @@
+openapi: 3.0.0
+
+info:
+  title: Grupo 4 - Cart, Checkout and Inventory API
+  version: "1.0.0"
+  description: >
+    Contrato REST unificado del Grupo 4 para el Entregable 1.
+    Incluye los dominios de Carrito, Checkout, Inventario, Reservas,
+    Concurrencia e Idempotencia.
+
+servers:
+  - url: https://api.marketplace.example.com
+    description: Producción
+  - url: http://localhost:8000
+    description: Desarrollo local
+
+tags:
+  - name: Cart
+    description: Operaciones asociadas al carrito de compras.
+  - name: Checkout
+    description: Operaciones asociadas al proceso de checkout.
+  - name: Inventory
+    description: Operaciones asociadas a consulta y reserva temporal de stock.
+
+paths:
+
+  /v1/cart:
+    post:
+      tags:
+        - Cart
+      summary: Crear carrito
+      description: Crea un nuevo carrito activo para el usuario autenticado.
+      operationId: createCart
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      responses:
+        "201":
+          description: Carrito creado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+              example:
+                cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+                userId: "e9d8c7b6-a543-2109-8765-fedcba098765"
+                status: "ACTIVE"
+                totalAmount: 0.00
+                currency: "USD"
+                items: []
+                createdAt: "2026-06-15T20:00:00Z"
+                updatedAt: "2026-06-15T20:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/cart/{cartId}:
+    get:
+      tags:
+        - Cart
+      summary: Consultar carrito
+      description: Retorna el carrito completo con sus ítems y totales calculados.
+      operationId: getCartById
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Carrito encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+              example:
+                cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+                userId: "e9d8c7b6-a543-2109-8765-fedcba098765"
+                status: "ACTIVE"
+                totalAmount: 1599.98
+                currency: "USD"
+                items:
+                  - itemId: "a1b2c3d4-e5f6-7890-1234-56789abcdef0"
+                    cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+                    productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+                    name: "Notebook Lenovo IdeaPad"
+                    quantity: 2
+                    unitPrice: 799.99
+                    subTotal: 1599.98
+                createdAt: "2026-06-15T20:00:00Z"
+                updatedAt: "2026-06-15T20:05:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/CartNotFound"
+
+  /v1/cart/{cartId}/items:
+    post:
+      tags:
+        - Cart
+      summary: Agregar producto al carrito
+      description: >
+        Agrega un producto al carrito. El servicio obtiene nombre y precio desde
+        Catálogo y valida disponibilidad antes de insertar el ítem.
+      operationId: addCartItem
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddCartItemRequest"
+            example:
+              productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+              quantity: 2
+      responses:
+        "201":
+          description: Producto agregado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartItem"
+              example:
+                itemId: "a1b2c3d4-e5f6-7890-1234-56789abcdef0"
+                cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+                productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+                name: "Notebook Lenovo IdeaPad"
+                quantity: 2
+                unitPrice: 799.99
+                subTotal: 1599.98
+        "400":
+          $ref: "#/components/responses/InvalidQuantity"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/CartNotFound"
+        "409":
+          $ref: "#/components/responses/InsufficientStock"
+
+  /v1/cart/{cartId}/items/{itemId}:
+    put:
+      tags:
+        - Cart
+      summary: Modificar cantidad de producto
+      description: Modifica la cantidad de un ítem existente y recalcula subtotales.
+      operationId: updateCartItem
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCartItemRequest"
+            example:
+              quantity: 3
+      responses:
+        "200":
+          description: Ítem actualizado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartItem"
+        "400":
+          $ref: "#/components/responses/InvalidQuantity"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ItemNotFound"
+        "409":
+          $ref: "#/components/responses/InsufficientStock"
+
+    delete:
+      tags:
+        - Cart
+      summary: Eliminar producto del carrito
+      description: Elimina un ítem del carrito y recalcula el total.
+      operationId: deleteCartItem
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Ítem eliminado correctamente.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ItemNotFound"
+
+  /v1/checkout:
+    post:
+      tags:
+        - Checkout
+      summary: Iniciar checkout
+      description: >
+        Inicia el proceso de checkout desde un carrito activo. Valida identidad,
+        idempotencia, propiedad del carrito, stock disponible, reserva temporal
+        e integración con Order Service.
+      operationId: initiateCheckout
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckoutRequest"
+            example:
+              cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+              currency: "USD"
+      responses:
+        "201":
+          description: Checkout iniciado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutIntent"
+        "400":
+          description: Carrito vacío, datos inválidos o Idempotency-Key ausente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                emptyCart:
+                  value:
+                    error: "EMPTY_CART"
+                    message: "No se puede iniciar el checkout de un carrito vacío."
+                missingIdempotencyKey:
+                  value:
+                    error: "MISSING_IDEMPOTENCY_KEY"
+                    message: "El header Idempotency-Key es obligatorio para esta operación."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/InsufficientStock"
+        "502":
+          $ref: "#/components/responses/OrderServiceUnavailable"
+
+  /v1/checkout/{checkoutId}:
+    get:
+      tags:
+        - Checkout
+      summary: Consultar estado del checkout
+      description: Retorna el estado actual de una intención de checkout.
+      operationId: getCheckoutById
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: checkoutId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Checkout encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/CheckoutNotFound"
+        "410":
+          $ref: "#/components/responses/CheckoutExpired"
+
+  /v1/inventory/{productId}:
+    get:
+      tags:
+        - Inventory
+      summary: Consultar stock disponible
+      description: >
+        Retorna el stock disponible calculado como stock físico total menos
+        reservas activas del Grupo 4.
+      operationId: getAvailableInventory
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Stock disponible consultado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryAvailability"
+              example:
+                productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+                stockTotal: 10
+                reservedQuantity: 5
+                availableStock: 5
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ProductNotFound"
+
+  /v1/stock/reservations:
+    post:
+      tags:
+        - Inventory
+      summary: Crear reserva temporal de stock
+      description: >
+        Crea una reserva temporal de inventario por 15 minutos. Esta operación
+        debe ejecutarse dentro de una transacción con SELECT FOR UPDATE para
+        prevenir sobreventa.
+      operationId: createStockReservation
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStockReservationRequest"
+            example:
+              productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+              cartId: "c3d4e5f6-7890-1234-5678-9abcdef01234"
+              userId: "e9d8c7b6-a543-2109-8765-fedcba098765"
+              quantity: 2
+      responses:
+        "201":
+          description: Reserva creada correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockReservation"
+        "400":
+          $ref: "#/components/responses/InvalidQuantity"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/InsufficientStock"
+
+  /v1/stock/reservations/{reservationId}:
+    delete:
+      tags:
+        - Inventory
+      summary: Liberar reserva temporal de stock
+      description: >
+        Libera anticipadamente una reserva activa, normalmente por pago rechazado
+        o cancelación del checkout.
+      operationId: releaseStockReservation
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Reserva liberada correctamente.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ReservationNotFound"
+
+components:
+
+  parameters:
+    AuthorizationHeader:
+      name: Authorization
+      in: header
+      required: true
+      schema:
+        type: string
+        example: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      description: Token JWT emitido por el Grupo 2.
+
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: "11111111-2222-4333-8444-555555555555"
+      description: UUID único por intento de checkout.
+
+    CorrelationIdHeader:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+        example: "99999999-8888-4777-9666-555555555555"
+      description: Identificador para trazabilidad distribuida.
+
+  schemas:
+
+    Cart:
+      type: object
+      required:
+        - cartId
+        - userId
+        - status
+        - totalAmount
+        - currency
+        - items
+        - createdAt
+        - updatedAt
+      properties:
+        cartId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - COMPLETED
+            - CLOSED
+        totalAmount:
+          type: number
+          format: double
+        currency:
+          type: string
+          example: "USD"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CartItem"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CartItem:
+      type: object
+      required:
+        - itemId
+        - cartId
+        - productId
+        - name
+        - quantity
+        - unitPrice
+        - subTotal
+      properties:
+        itemId:
+          type: string
+          format: uuid
+        cartId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        unitPrice:
+          type: number
+          format: double
+        subTotal:
+          type: number
+          format: double
+
+    AddCartItemRequest:
+      type: object
+      required:
+        - productId
+        - quantity
+      properties:
+        productId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+
+    UpdateCartItemRequest:
+      type: object
+      required:
+        - quantity
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+
+    CreateCheckoutRequest:
+      type: object
+      required:
+        - cartId
+      properties:
+        cartId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          default: "USD"
+
+    CheckoutIntent:
+      type: object
+      required:
+        - checkoutId
+        - cartId
+        - userId
+        - status
+        - items
+        - totalAmount
+        - currency
+        - reservationsExpiresAt
+        - createdAt
+        - updatedAt
+      properties:
+        checkoutId:
+          type: string
+          format: uuid
+        cartId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - PENDING
+            - CONFIRMED
+            - FAILED
+            - EXPIRED
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckoutItem"
+        totalAmount:
+          type: number
+          format: double
+        currency:
+          type: string
+          example: "USD"
+        reservationsExpiresAt:
+          type: string
+          format: date-time
+        orderId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CheckoutItem:
+      type: object
+      required:
+        - productId
+        - name
+        - quantity
+        - unitPrice
+        - subTotal
+        - reservationId
+      properties:
+        productId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        unitPrice:
+          type: number
+          format: double
+        subTotal:
+          type: number
+          format: double
+        reservationId:
+          type: string
+          format: uuid
+
+    InventoryAvailability:
+      type: object
+      required:
+        - productId
+        - stockTotal
+        - reservedQuantity
+        - availableStock
+      properties:
+        productId:
+          type: string
+          format: uuid
+        stockTotal:
+          type: integer
+          minimum: 0
+        reservedQuantity:
+          type: integer
+          minimum: 0
+        availableStock:
+          type: integer
+          minimum: 0
+
+    CreateStockReservationRequest:
+      type: object
+      required:
+        - productId
+        - quantity
+      properties:
+        productId:
+          type: string
+          format: uuid
+        cartId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+
+    StockReservation:
+      type: object
+      required:
+        - reservationId
+        - productId
+        - quantity
+        - status
+        - expiresAt
+        - createdAt
+      properties:
+        reservationId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        cartId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - EXPIRED
+            - COMPLETED
+            - RELEASED
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          nullable: true
+
+  responses:
+
+    Unauthorized:
+      description: Usuario no autenticado o token inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "UNAUTHORIZED_ACCESS"
+            message: "Token JWT ausente, inválido o expirado."
+
+    Forbidden:
+      description: Usuario autenticado sin permisos sobre el recurso.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "FORBIDDEN"
+            message: "No tienes permiso para acceder a este recurso."
+
+    CartNotFound:
+      description: Carrito no encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "CART_NOT_FOUND"
+            message: "El carrito solicitado no existe."
+
+    CheckoutNotFound:
+      description: Checkout no encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "CHECKOUT_NOT_FOUND"
+            message: "El checkout solicitado no existe."
+
+    ProductNotFound:
+      description: Producto no encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "PRODUCT_NOT_FOUND"
+            message: "El producto solicitado no existe."
+
+    ItemNotFound:
+      description: Ítem no encontrado en el carrito.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "ITEM_NOT_FOUND"
+            message: "El ítem solicitado no existe en el carrito."
+
+    ReservationNotFound:
+      description: Reserva no encontrada.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "RESERVATION_NOT_FOUND"
+            message: "La reserva solicitada no existe o ya fue liberada."
+
+    InvalidQuantity:
+      description: Cantidad inválida.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "INVALID_QUANTITY"
+            message: "La cantidad debe ser un entero mayor a cero."
+
+    InvalidParameter:
+      description: Parámetro inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "INVALID_PARAMETER"
+            message: "El parámetro enviado no tiene un formato válido."
+
+    InsufficientStock:
+      description: Stock insuficiente.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "INSUFFICIENT_STOCK"
+            message: "No hay stock suficiente para completar la operación."
+            details:
+              productId: "f0e9d8c7-b6a5-4321-0987-fedcba098765"
+              requested: 3
+              available: 1
+
+    CheckoutExpired:
+      description: Checkout expirado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "CHECKOUT_EXPIRED"
+            message: "La reserva asociada al checkout expiró."
+            details:
+              expiredAt: "2026-06-15T20:15:00Z"
+
+    OrderServiceUnavailable:
+      description: Order Service no disponible.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "ORDER_SERVICE_UNAVAILABLE"
+            message: "No se pudo crear la orden. Las reservas fueron liberadas."
