@@ -1,10 +1,14 @@
 # 1. Descarga la imagen oficial de Prism
 FROM stoplight/prism:4
 
-# 2. Copia el archivo de contrato al contenedor
-COPY contrato-g4.yaml /tmp/contrato.yaml
-# 3. Informa el puerto interno que utiliza el contenedor 
+# 2. Creamos una carpeta de trabajo segura que Render no borre
+WORKDIR /app
+
+# 3. Copiamos el archivo comprobado hacia esta carpeta segura
+COPY contrato-g4.yaml /app/contrato.yaml
+
+# 4. Exponemos el puerto 10000
 EXPOSE 10000
 
-# 4. Comando para ejecutar Prism en modo mock apuntando al archivo copiado
-CMD ["mock", "-h", "0.0.0.0", "-p", "4010", "/tmp/contrato.yaml"]
+# 5. Arrancamos Prism apuntando a la nueva ruta inamovible
+CMD ["mock", "-h", "0.0.0.0", "-p", "10000", "/app/contrato.yaml"]
