@@ -2,7 +2,7 @@
 FROM stoplight/prism:4
 
 # 2. Copia el archivo de contrato al contenedor
-COPY ["contrato-g4 .YAML", "/tmp/contrato.yaml"]
+COPY ["contrato-g4.yaml", "/tmp/contrato.yaml"]
 
 # 3. Informa el puerto interno que utiliza el contenedor 
 EXPOSE 10000
