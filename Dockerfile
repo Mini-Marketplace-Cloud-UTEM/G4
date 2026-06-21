@@ -1,6 +1,7 @@
 # 1. Descarga la imagen oficial de Prism
 FROM stoplight/prism:4
 
+RUN ls -la
 # 2. Copia el archivo de contrato al contenedor
 COPY contrato-g4.YAML /tmp/contrato.yaml
 
