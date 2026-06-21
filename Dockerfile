@@ -13,16 +13,14 @@
 # 1. Descarga la imagen oficial
 FROM stoplight/prism:4
 
-# 2. Copiamos TODO tu repositorio a una carpeta aislada llamada /auditoria
+# 2. Copiamos TODO tu repositorio
 COPY . /auditoria/
 
-# 3. Listamos todo recursivamente. 
-# El flag '-b' revelará cualquier espacio invisible o carácter raro escapándolo (ej: \ )
-RUN ls -laRb /auditoria/
+# 3. Usamos un script rápido para imprimir los nombres de los archivos en crudo
+RUN node -e "const fs = require('fs'); const files = fs.readdirSync('/auditoria'); console.log('Archivos encontrados:', files);"
 
 # 4. Exponemos el puerto que le gusta a Render
 EXPOSE 10000
 
-# 5. Ponemos un comando inofensivo para que el contenedor no colapse buscando Node.js
-CMD ["echo", "Auditoria de archivos completada. Revisa los logs de construccion."]
-
+# 5. Comando inofensivo
+CMD ["echo", "listooooooooo."]
