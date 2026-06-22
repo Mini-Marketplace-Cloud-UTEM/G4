@@ -94,10 +94,15 @@ Como el grupo se encarga ded la parte del núcleo transaccional de compra, las i
 
 Grupo,Relación
 Grupo 1 — Frontend,Consume nuestros endpoints /v1/cart y /v1/checkout
+
 Grupo 2 — Identidad,Validamos sesiones vía POST /auth/validate
+
 Grupo 3 — Catálogo,Consultamos precios vía GET /v1/products/{id} y escuchamos ProductPriceChanged
+
 Grupo 5 — Pedidos,Orquestamos la creación de la orden tras el checkout
+
 Grupo 7 — Inventario Físico,Consultamos stock base vía GET /v1/products/{id}/stock
+
 Grupo 8 — Pago Simulado,Escuchamos sus eventos PaymentApproved y PaymentRejected para confirmar o liberar stock
 -----------------------------------------------------------------------------------------------------------------------------------
 #ESTADO DEL PROYECTO
