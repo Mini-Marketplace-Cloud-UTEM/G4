@@ -11,9 +11,13 @@ Servicio backend del **Grupo 4** para el ecosistema del Marketplace Distribuido 
 Nuestro microservicio administra el núcleo transaccional del proceso de compra del usuario. Sus responsabilidades principales incluyen:
 
 -**Gestión de Compra**:Permite al usuario autenticado gestionar su sesión mediante la adición o eliminación de productos, mientras el servicio se encarga de calcular 100% en el backend los subtotales y totales reales.
+
 -**Inventario Temporal y Concurrencia**: Actualiza de forma temporal el stock del producto mediante un **bloqueo pesimista** en la base de datos. Esto deja el stock reservado de forma segura y evita la sobreventa (concurrencia) cuando múltiples usuarios intentan comprar el mismo ítem al mismo tiempo. Si la transacción no se concreta, el servicio devuelve la reserva al conteo general.
+
 -**Seguridad y Propiedad**:Garantiza mediante validaciones estrictas que la compra y el carrito pertenezcan única y exclusivamente al usuario que la está realizando.
+
 -**Idempotencia**:Exige el uso obligatorio de una llave única (`Idempotency-Key`) en el checkout. Con esto, el servicio se asegura de no tener duplicidad de transacciones, protegiendo al sistema ante recargas de página, reintentos de red o "dobles clics" accidentales del cliente.
+
 -----------------------------------------------------------------------------------------------------------------------------------
 ## Contrato de la API (REST y Eventos)
 
