@@ -24,7 +24,7 @@ tags:
 
 paths:
 
-/:
+  /:
     get:
       summary: Bienvenida a la API
       description: Endpoint raíz que muestra el estado de la API y cómo usarla.
