@@ -90,9 +90,11 @@ Para mantener la arquitectura desacoplada, nuestro servicio se comunica asíncro
 
 -----------------------------------------------------------------------------------------------------------------------------------
 #INTEGRACIONES
+
 Como el grupo se encarga ded la parte del núcleo transaccional de compra, las integraciones son con casi todos los demás grupos del entorno:
 
 Grupo,Relación
+
 Grupo 1 — Frontend,Consume nuestros endpoints /v1/cart y /v1/checkout
 
 Grupo 2 — Identidad,Validamos sesiones vía POST /auth/validate
