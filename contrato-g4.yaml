@@ -24,6 +24,32 @@ tags:
 
 paths:
 
+/:
+    get:
+      summary: Bienvenida a la API
+      description: Endpoint raíz que muestra el estado de la API y cómo usarla.
+      responses:
+        '200':
+          description: Mensaje de bienvenida exitoso
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                bienvenida:
+                  value:
+                    mensaje: "API Mock del Grupo 4!"
+                    estado: "En línea y funcionando"
+                    instrucciones: "Para consumir esta API, utiliza herramientas como Postman o Insomnia."
+                    headers_requeridos:
+                      Authorization: "Bearer <cualquier_token>"
+                      X-Correlation-Id: "<uuid_aqui>"
+                    endpoints_disponibles:
+                      carrito: "/v1/cart"
+                      checkout: "/v1/checkout"
+                      inventario: "/v1/inventory"
+                      reservas: "/v1/stock/reservations"
+
   /v1/cart:
     post:
       tags:
