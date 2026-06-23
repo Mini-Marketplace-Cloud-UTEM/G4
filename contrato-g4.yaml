@@ -9,8 +9,8 @@ info:
     Concurrencia e Idempotencia.
 
 servers:
-  - url: https://api.marketplace.example.com
-    description: Producción
+  - url: https://api-mock-grupo4.onrender.com
+    description: Servidor Mock del Grupo 4 en Render
   - url: http://localhost:8000
     description: Desarrollo local
 
