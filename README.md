@@ -108,5 +108,34 @@ Grupo 7 — Inventario Físico,Consultamos stock base vía GET /v1/products/{id}
 Grupo 8 — Pago Simulado,Escuchamos sus eventos PaymentApproved y PaymentRejected para confirmar o liberar stock
 
 -----------------------------------------------------------------------------------------------------------------------------------
+# Entorno de Pruebas (Mock API para el Grupo 1)
+
+Para no bloquear el desarrollo del Frontend, hemos desplegado un servidor Mock en Render usando Prism. Este servidor valida los contratos OpenAPI y devuelve respuestas simuladas para que puedan probar sus interfaces.
+
+**Base URL:** `https://api-mock-grupo4.onrender.com`
+
+*Nota: Todas las peticiones deben incluir el header `Authorization: Bearer <token>` para pasar la validación de seguridad.*
+
+| Acción | Método | Endpoint | ¿Requiere Body? (JSON) |
+| :--- | :---: | :--- | :--- |
+| **Obtener carrito** | `GET` | `/v1/cart/{cartId}` | No |
+| **Agregar producto** | `POST` | `/v1/cart/{cartId}/items` | Sí (`productId`, `quantity`) |
+| **Eliminar producto** | `DELETE` | `/v1/cart/{cartId}/items/{itemId}` | No |
+| **Vaciar carrito** | `DELETE` | `/v1/cart/{cartId}` | No |
+| **Iniciar Checkout** | `POST` | `/v1/checkout` | Sí (Datos de facturación) |
+| **Consultar Checkout**| `GET` | `/v1/checkout/{checkoutId}` | No |
+
+> **Importante:** Como este servidor está en la capa gratuita de Render, si no se ha usado en 15 minutos entrará en modo reposo. La primera petición puede tardar hasta 50 segundos en responder mientras "despierta". Las siguientes serán instantáneas.
+
+### Datos de Prueba para el Mock
+
+Para probar las peticiones en este entorno simulado, utilicen los siguientes datos de ejemplo que ya están cargados en el servidor:
+
+* **Token de Autorización válido:** `Bearer mi-token-falso-123`
+* **ID de Carrito de prueba (`cartId`):** `26f79265-51a4-9eb1-e729-81228c5ff597`
+
+**Ejemplo de URL completa para hacer un GET (Obtener carrito):**
+`https://api-mock-grupo4.onrender.com/v1/cart/26f79265-51a4-9eb1-e729-81228c5ff597`
+-----------------------------------------------------------------------------------------------------------------------------------
 #ESTADO DEL PROYECTO
 En desarrollo — Fase E2 (MOCKUP).
