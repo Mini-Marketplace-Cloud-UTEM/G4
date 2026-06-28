@@ -1,3 +1,5 @@
+Cualquier problema con la integración, contactar al Grupo 4.
+
 # G4 - Cart, Checkout and Inventory API
 
 Bienvenido a la API del Grupo 4. 
@@ -22,6 +24,3 @@ Si necesitas agregar un producto al carrito, realiza un POST a `/v1/cart/{cart_i
   "quantity": 1
 }
 
-----------------------------------------------------------------------------------------------------------------------------------
-
-Cualquier problema con la integración, contactar al Grupo 4.
