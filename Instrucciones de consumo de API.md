@@ -22,6 +22,7 @@ Ejemplos de consumo
 Si estás llamando a nuestra API desde una aplicación web:
 
 JavaScript
+
 const response = await fetch("https://g4-carrito-checkout-inventario-y.onrender.com/v1/cart", {
   method: "POST",
   headers: {
@@ -30,10 +31,13 @@ const response = await fetch("https://g4-carrito-checkout-inventario-y.onrender.
   }
 });
 const data = await response.json();
+
+
 2. Otros Microservicios (Python / httpx)
 Si estás llamando a nuestra API desde otro servicio backend:
 
-Python
+Python:
+
 import httpx
 
 async def llamar_api_grupo4():
@@ -46,4 +50,5 @@ async def llamar_api_grupo4():
             }
         )
     return response.json()
+    
 ¿Problemas con la integración? Contactar al Grupo 4.
