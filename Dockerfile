@@ -1,11 +1,18 @@
-# 1. Descarga la imagen oficial de Prism
-FROM stoplight/prism:4
+# 1. Usamos una imagen oficial y ligera de Python
+FROM python:3.10-slim
 
-# 2. Copiamos el archivo directamente a la raíz para que Render no lo borre
-COPY contrato-g4.yaml /contrato.yaml
+# 2. Le decimos a Docker en qué carpeta interna va a trabajar
+WORKDIR /app
 
-# 3. Exponemos el puerto 10000
-EXPOSE 10000
+# 3. Copiamos el archivo de requerimientos y los instalamos
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Arrancamos Prism apuntando a la raíz
-CMD ["mock", "-h", "0.0.0.0", "-p", "10000", "/contrato.yaml"]
+# 4. Copiamos todo nuestro código (el main.py) al contenedor
+COPY . .
+
+# 5. Exponemos el puerto estándar
+EXPOSE 8000
+
+# 6. El comando maestro para arrancar FastAPI
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
