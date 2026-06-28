@@ -1,26 +1,49 @@
-Cualquier problema con la integración, contactar al Grupo 4.
+G4 - Cart, Checkout and Inventory API
+Bienvenido a la API del Grupo 4. Esta es nuestra interfaz de backend construida en FastAPI, que gestiona el carrito de compras, el proceso de checkout y la reserva de stock.
 
-# G4 - Cart, Checkout and Inventory API
+## Documentación interactiva (Swagger)
 
-Bienvenido a la API del Grupo 4. 
+Puedes probar todos nuestros endpoints en tiempo real sin necesidad de herramientas externas aquí:
+https://g4-carrito-checkout-inventario-y.onrender.com/docs
 
-##  Enlace de documentación (Swagger)
-Puedes probar todos nuestros endpoints en tiempo real aquí:
-[https://g4-carrito-checkout-inventario-y.onrender.com/docs](https://g4-carrito-checkout-inventario-y.onrender.com/docs)
+## Cómo integrar nuestra API
 
-##  Cómo consumir nuestra API
-Para integrar tu servicio con el nuestro, ten en cuenta lo siguiente:
+Para que otros servicios (Frontend o Backend) puedan consumir nuestra API, deben respetar el siguiente contrato:
 
-### Headers Obligatorios
-Todas las peticiones deben incluir los siguientes headers para ser aceptadas:
-- `Authorization`: `Bearer token_de_prueba_123`
-- `X-Correlation-Id`: `[UUID_unico_de_tu_peticion]`
+Headers obligatorios
+Todas las peticiones deben incluir los siguientes headers:
 
-### Ejemplos de Integración
-Si necesitas agregar un producto al carrito, realiza un POST a `/v1/cart/{cart_id}/items` con el siguiente cuerpo JSON:
-```json
-{
-  "productId": "ID_DEL_PRODUCTO",
-  "quantity": 1
-}
+Authorization: Bearer token_de_prueba_123
 
+X-Correlation-Id: [UUID_unico_de_tu_peticion]
+
+Ejemplos de consumo
+1. Frontend (JavaScript / Fetch)
+Si estás llamando a nuestra API desde una aplicación web:
+
+JavaScript
+const response = await fetch("https://g4-carrito-checkout-inventario-y.onrender.com/v1/cart", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer token_de_prueba_123",
+    "X-Correlation-Id": "req-001"
+  }
+});
+const data = await response.json();
+2. Otros Microservicios (Python / httpx)
+Si estás llamando a nuestra API desde otro servicio backend:
+
+Python
+import httpx
+
+async def llamar_api_grupo4():
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://g4-carrito-checkout-inventario-y.onrender.com/v1/cart",
+            headers={
+                "Authorization": "Bearer token_de_prueba_123",
+                "X-Correlation-Id": "req-001"
+            }
+        )
+    return response.json()
+¿Problemas con la integración? Contactar al Grupo 4.
