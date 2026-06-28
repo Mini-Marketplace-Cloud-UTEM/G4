@@ -15,4 +15,4 @@ COPY . .
 EXPOSE 8000
 
 # 6. El comando maestro para arrancar FastAPI
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "API_para_consumo:app", "--host", "0.0.0.0", "--port", "8000"]
