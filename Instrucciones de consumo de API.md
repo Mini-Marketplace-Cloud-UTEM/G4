@@ -19,6 +19,7 @@ Todas las peticiones deben incluir los siguientes headers:
 #### 1. Frontend (JavaScript / Fetch)
 Si estás llamando a nuestra API desde una aplicación web:
 
+1.- JAVASCRIPT
 ```javascript
 const response = await fetch("[https://g4-carrito-checkout-inventario-y.onrender.com/v1/cart](https://g4-carrito-checkout-inventario-y.onrender.com/v1/cart)", {
   method: "POST",
@@ -29,6 +30,7 @@ const response = await fetch("[https://g4-carrito-checkout-inventario-y.onrender
 });
 const data = await response.json();
 ```
+2.- PYTHON
 ```Python
 import httpx
 
