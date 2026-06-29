@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException, Header, Path
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 import httpx
+import logica_negocio
 
 # Inicializamos la aplicación FastAPI
 app = FastAPI(
@@ -22,6 +23,11 @@ app.add_middleware(
 )
 
 # --- MODELOS DE DATOS (Pydantic adaptado al nuevo Postman JSON) ---
+class AddItemRequest(BaseModel):
+    product_id: str
+    name: str
+    quantity: int = Field(gt=0, description="La cantidad debe ser mayor a cero")
+    precio_unitario: float
 
 class AddItemRequest(BaseModel):
     productId: str
@@ -70,24 +76,37 @@ async def create_cart(
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Crea un nuevo carrito de compras vacío."""
-    new_cart_id = str(uuid.uuid4())
-    new_cart = Cart(cart_id=new_cart_id, items=[], total_price=0.0)
-    fake_carts_db[new_cart_id] = new_cart
-    return new_cart
+    """Crea un nuevo carrito de compras vacío en la base de datos."""
+    # Crea el registro en Supabase y retorna el UUID generado
+    nuevo_cart_id = await logica_negocio.crear_carrito_bd()
+    
+    # Retorna la estructura inicial vacía respetando el response_model
+    return {"cart_id": nuevo_cart_id, "items": [], "total_price": 0.0}
+# Asegúrate de tener este GET en main.py
 
+@app.get("/v1/cart/{cart_id}", response_model=Cart, tags=["Cart"])
+async def get_cart(cart_id: str):
+    """Consulta el estado actual del carrito desde la base de datos."""
+    resultado = await logica_negocio.obtener_carrito_completo(cart_id)
+    
+    if resultado is None:
+        raise HTTPException(status_code=404, detail="CARRITO_NO_ENCONTRADO")
+    
+    return resultado
+
+"""""
 @app.get("/v1/cart/{cart_id}", response_model=Cart, tags=["Cart"])
 async def get_cart(
     cart_id: str,
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Consulta los detalles de un carrito específico."""
+    Consulta los detalles de un carrito específico.
     cart = fake_carts_db.get(cart_id)
     if not cart:
         raise HTTPException(status_code=404, detail="CARRITO_NO_ENCONTRADO")
     return cart
-
+"""
 @app.post("/v1/cart/{cart_id}/items", response_model=Cart, tags=["Cart"])
 async def add_item_to_cart(
     cart_id: str, 
@@ -95,12 +114,14 @@ async def add_item_to_cart(
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Agrega un producto al carrito, validando precio y existencia con el Grupo 3."""
-    cart = fake_carts_db.get(cart_id)
-    if not cart:
+    """Agrega un producto al carrito, valida con Grupo 3 y persiste en Supabase."""
+    
+    # 1. Verificar primero si el carro existe en la base de datos
+    carro_existente = await logica_negocio.obtener_carrito_completo(cart_id)
+    if not carro_existente:
         raise HTTPException(status_code=404, detail="CARRITO_NO_ENCONTRADO")
     
-    # --- INTEGRACIÓN CON GRUPO 3 ---
+    # 2. INTEGRACIÓN CON GRUPO 3 (CATÁLOGO)
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
@@ -117,19 +138,25 @@ async def add_item_to_cart(
     if producto_data.get("status") != "ACTIVE":
         raise HTTPException(status_code=400, detail="PRODUCTO_INACTIVO")
 
-    # Creamos el item con ID único
-    nuevo_item = CartItem(
-        item_id=str(uuid.uuid4()),
-        productId=request.productId,
-        name=producto_data.get("name", "Producto Generico"),
-        quantity=request.quantity,
-        unitPrice=float(producto_data.get("price", 0.0))
-    )
+    # CAMBIO AQUÍ: Usamos float en vez de int para respetar la lógica de Decimales de tu compañero
+    precio_unidad = int(producto_data.get("price", 0.0)) 
+    nombre_producto = producto_data.get("name", "Producto Genérico")
 
-    cart.items.append(nuevo_item)
-    recalcular_total_carrito(cart)
+    # 3. Guardar el ítem validado en Supabase (Usando la matemática de tu compañero)
+    await logica_negocio.agregar_item_bd(
+        cart_id=cart_id,
+        product_id=request.productId,
+        name=nombre_producto,
+        quantity=request.quantity,
+        precio_unitario=precio_unidad
+    )
     
-    return cart
+    # 4. Procesar el cálculo de totales (Lógica de tu compañero adaptada a BD)
+    await logica_negocio.recalcular_total_carrito_bd(cart_id)
+    
+    # 5. Recuperar el estado actualizado directo de la base de datos para responder
+    carro_actualizado = await logica_negocio.obtener_carrito_completo(cart_id)
+    return carro_actualizado
 
 @app.put("/v1/cart/{cart_id}/items/{item_id}", response_model=Cart, tags=["Cart"])
 async def update_item_quantity(
@@ -218,6 +245,11 @@ async def get_checkout_status(
         raise HTTPException(status_code=404, detail="CHECKOUT_NO_ENCONTRADO")
     return checkout
 
+@app.post("/v1/cart/{cart_id}/checkout", tags=["Cart"])
+async def checkout_cart(cart_id: str):
+    """Marca el carrito como PENDING, indicando intención de pedido."""
+    await logica_negocio.cerrar_pedido(cart_id)
+    return {"message": "Intención de pedido registrada correctamente", "status": "PENDING"}
 # ==========================================
 # ENDPOINTS DE INVENTARIO (RESERVAS)
 # ==========================================
@@ -272,3 +304,7 @@ async def release_stock(
         "reservation_id": reservation_id,
         "message": "Stock liberado correctamente"
     }
+
+class AddItemRequest(BaseModel):
+    productId: str
+    quantity: int
