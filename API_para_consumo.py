@@ -58,6 +58,12 @@ class ReservationRequest(BaseModel):
     userId: str
     quantity: int
 
+class ReservationRequest(BaseModel):
+    productId: str
+    cartId: str
+    userId: str
+    quantity: int
+
 # --- BASES DE DATOS SIMULADAS ---
 fake_carts_db = {}
 fake_checkouts_db = {}
@@ -250,6 +256,7 @@ async def checkout_cart(cart_id: str):
     """Marca el carrito como PENDING, indicando intención de pedido."""
     await logica_negocio.cerrar_pedido(cart_id)
     return {"message": "Intención de pedido registrada correctamente", "status": "PENDING"}
+
 # ==========================================
 # ENDPOINTS DE INVENTARIO (RESERVAS)
 # ==========================================
@@ -260,50 +267,49 @@ async def check_inventory(
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Consulta el stock disponible de un producto."""
-    # Retorna data simulada, restando lo que tengamos en reservas temporales
-    reservado = fake_inventory_reservations.get(product_id, 0)
-    stock_total_simulado = 100 
-    
-    return {
-        "productId": product_id,
-        "stockVisible": stock_total_simulado - reservado,
-        "reservas_activas": reservado
-    }
+    """Consulta el stock disponible restando las reservas activas."""
+    resultado = await logica_negocio.consultar_inventario_bd(product_id)
+    if not resultado:
+        raise HTTPException(status_code=404, detail="PRODUCT_NOT_FOUND")
+    return resultado
 
-@app.post("/v1/stock/reservations", tags=["Inventory"])
+
+@app.post("/v1/stock/reservations", status_code=201, tags=["Inventory"])
 async def reserve_stock(
     request: ReservationRequest,
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Crea una reserva temporal de stock."""
-    reservation_id = str(uuid.uuid4())
-    
-    current_reserved = fake_inventory_reservations.get(request.productId, 0)
-    fake_inventory_reservations[request.productId] = current_reserved + request.quantity
-    
-    return {
-        "reservation_id": reservation_id,
-        "status": "RESERVED",
-        "productId": request.productId,
-        "quantity": request.quantity
-    }
+    """Crea una reserva temporal de stock de forma segura."""
+    try:
+        resultado = await logica_negocio.reservar_stock_bd(
+            request.productId,
+            request.cartId,
+            request.userId,
+            request.quantity
+        )
+        return resultado
+    except Exception as e:
+        error_msg = str(e)
+        if 'INSUFFICIENT_STOCK' in error_msg:
+            raise HTTPException(status_code=409, detail="INSUFFICIENT_STOCK")
+        elif 'PRODUCT_NOT_FOUND' in error_msg:
+            raise HTTPException(status_code=404, detail="PRODUCT_NOT_FOUND")
+        else:
+            raise HTTPException(status_code=400, detail=error_msg)
 
-@app.delete("/v1/stock/reservations/{reservation_id}", tags=["Inventory"])
+
+@app.delete("/v1/stock/reservations/{reservation_id}", status_code=204, tags=["Inventory"])
 async def release_stock(
     reservation_id: str,
     authorization: Optional[str] = Header(None),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Libera una reserva temporal de stock (ej. si el pago falla)."""
-    # Como es un mock y no guardamos el detalle por ID de reserva en memoria, 
-    # simplemente devolvemos un OK. En la vida real aquí buscaríamos la reserva y restaríamos la cantidad.
-    return {
-        "status": "RELEASED",
-        "reservation_id": reservation_id,
-        "message": "Stock liberado correctamente"
-    }
+    """Libera anticipadamente una reserva activa."""
+    exito = await logica_negocio.liberar_reserva_bd(reservation_id)
+    if not exito:
+        raise HTTPException(status_code=404, detail="RESERVATION_NOT_FOUND")
+    return
 
 class AddItemRequest(BaseModel):
     productId: str
