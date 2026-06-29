@@ -1,4 +1,5 @@
 import asyncpg
+import json
 import uuid
 
 # --- CONFIGURACIÓN CENTRALIZADA ---
@@ -91,5 +92,80 @@ async def cerrar_pedido(cart_id: str):
             "PENDING", cart_id
         )
         print(f"Carrito {cart_id} marcado como PENDING (Intención de compra).")
+    finally:
+        await conn.close()
+
+async def consultar_inventario_bd(product_id: str):
+    """Consulta el stock físico y las reservas activas en Supabase."""
+    conn = await get_db_connection()
+    try:
+        # 1. Obtenemos el stock físico total
+        stock_row = await conn.fetchrow(
+            "SELECT stock_total FROM inventory WHERE product_id = $1::uuid", 
+            product_id
+        )
+        if not stock_row:
+            return None
+
+        stock_total = stock_row['stock_total']
+
+        # 2. Obtenemos las reservas activas (estado ACTIVE y no expiradas)
+        res_row = await conn.fetchrow("""
+            SELECT COALESCE(SUM(quantity), 0) as reserved_qty
+            FROM stock_reservations
+            WHERE product_id = $1::uuid
+              AND status = 'ACTIVE'
+              AND expires_at > NOW()
+        """, product_id)
+
+        reserved_qty = res_row['reserved_qty'] if res_row else 0
+        available_stock = stock_total - reserved_qty
+
+        return {
+            "productId": product_id,
+            "stockTotal": stock_total,
+            "reservedQuantity": reserved_qty,
+            "availableStock": available_stock
+        }
+    finally:
+        await conn.close()
+
+
+async def reservar_stock_bd(product_id: str, cart_id: str, user_id: str, quantity: int):
+    """Llama a la función SQL de concurrencia en Supabase."""
+    conn = await get_db_connection()
+    try:
+        # Llamamos al Procedimiento Almacenado que maneja el SELECT FOR UPDATE
+        resultado_json = await conn.fetchval("""
+            SELECT reserve_stock($1::uuid, $2::uuid, $3::uuid, $4::integer)
+        """, product_id, cart_id, user_id, quantity)
+
+        # asyncpg nos devuelve el JSON como un string de texto, lo convertimos a diccionario
+        return json.loads(resultado_json)
+        
+    except asyncpg.exceptions.RaiseError as e:
+        # Capturamos los errores que arroja la función SQL
+        error_msg = str(e)
+        if 'INSUFFICIENT_STOCK' in error_msg:
+            raise Exception("INSUFFICIENT_STOCK")
+        elif 'Producto no encontrado' in error_msg:
+            raise Exception("PRODUCT_NOT_FOUND")
+        else:
+            raise Exception(error_msg)
+    finally:
+        await conn.close()
+
+
+async def liberar_reserva_bd(reservation_id: str):
+    """Cambia el estado de una reserva a RELEASED."""
+    conn = await get_db_connection()
+    try:
+        resultado = await conn.execute("""
+            UPDATE stock_reservations
+            SET status = 'RELEASED'
+            WHERE reservation_id = $1::uuid
+        """, reservation_id)
+        # conn.execute devuelve "UPDATE 1" si encontró la fila, "UPDATE 0" si no
+        return resultado == "UPDATE 1"
     finally:
         await conn.close()
