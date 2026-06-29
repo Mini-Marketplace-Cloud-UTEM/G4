@@ -31,7 +31,7 @@ Nuestra API se divide en 10 endpoints REST síncronos y un catálogo de eventos 
 
 #### Módulo 1: Gestión de Carrito (Cart) 
 | Método | Endpoint | Descripción |
-
+| :--- | :---: | :--- |
 | **POST** | `/v1/cart` | Crea un nuevo carrito vacío para el usuario autenticado. |
 
 | **GET** | `/v1/cart/{cartId}` | Retorna el carrito con sus ítems y el monto total calculado. |
@@ -44,14 +44,14 @@ Nuestra API se divide en 10 endpoints REST síncronos y un catálogo de eventos 
 
 #### Módulo 2: Checkout 
 | Método | Endpoint | Descripción |
-
+| :--- | :---: | :--- |
 | **POST** | `/v1/checkout` | Inicia el proceso de compra basado en un `cartId`. Requiere `Idempotency-Key`. |
 
 | **GET** | `/v1/checkout/{checkoutId}` | Consulta el estado actual de una intención de compra. |
 
 #### Módulo 3: Inventario Temporal (Concurrencia)
 | Método | Endpoint | Descripción |
-
+| :--- | :---: | :--- |
 | **GET** | `/v1/inventory/{productId}` | Consulta el stock real disponible (Stock Total G7 - Reservas Activas G4). |
 
 | **POST** | `/v1/stock/reservations` | Crea un bloqueo/reserva temporal (15 minutos) de unidades. |
@@ -66,7 +66,7 @@ Para mantener la arquitectura desacoplada, nuestro servicio se comunica asíncro
 
 #### Eventos que NOSOTROS Publicamos
 | Evento | Cuándo se emite |
-
+| :--- | :---: |
 | `CheckoutStarted` | Al iniciar exitosamente un checkout. |
 
 | `StockReserved` | Cuando se logra asegurar el bloqueo de inventario. |
@@ -79,7 +79,7 @@ Para mantener la arquitectura desacoplada, nuestro servicio se comunica asíncro
 
 #### Eventos que NOSOTROS Consumimos 
 | Evento | Productor | Nuestra Acción Interna |
-
+| :--- | :---: | :--- |
 | `PaymentApproved` | **G8 (Pagos)** | Marcamos Checkout como `CONFIRMED` y Reservas como `COMPLETED`. |
 
 | `PaymentRejected` | **G8 (Pagos)** | Marcamos Checkout como `FAILED` y liberamos el stock (`RELEASED`). |
