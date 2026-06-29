@@ -1,5 +1,5 @@
 # Grupo 4- Carrito, Checkout, Inventario y Concurrencia
-
+(Se tienen otros readme en el repositorio para disposición y ver en que punto está el grupo en el momento)
 Integrantes:
 
 Javier Agusto (Lidel suplemo) - Ricardo Castillo - Ignacio Muñoz - Jaime Orellana - Carlos Quinteros
@@ -124,4 +124,6 @@ Para probar las peticiones en este entorno simulado, utilicen los siguientes dat
 `https://api-mock-grupo4.onrender.com/v1/cart/26f79265-51a4-9eb1-e729-81228c5ff597`
 -----------------------------------------------------------------------------------------------------------------------------------
 #ESTADO DEL PROYECTO
-En desarrollo — Fase E2 (MOCKUP).
+En desarrollo — Fase E3.
+
+
