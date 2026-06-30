@@ -88,7 +88,7 @@ async def create_cart(
     
     # Retorna la estructura inicial vacía respetando el response_model
     return {"cart_id": nuevo_cart_id, "items": [], "total_price": 0.0}
-# Asegúrate de tener este GET en main.py
+
 
 @app.get("/v1/cart/{cart_id}", response_model=Cart, tags=["Cart"])
 async def get_cart(cart_id: str):
@@ -144,11 +144,11 @@ async def add_item_to_cart(
     if producto_data.get("status") != "ACTIVE":
         raise HTTPException(status_code=400, detail="PRODUCTO_INACTIVO")
 
-    # CAMBIO AQUÍ: Usamos float en vez de int para respetar la lógica de Decimales de tu compañero
+   
     precio_unidad = int(producto_data.get("price", 0.0)) 
     nombre_producto = producto_data.get("name", "Producto Genérico")
 
-    # 3. Guardar el ítem validado en Supabase (Usando la matemática de tu compañero)
+    # 3. Guardar el ítem validado en Supabase 
     await logica_negocio.agregar_item_bd(
         cart_id=cart_id,
         product_id=request.productId,
@@ -157,7 +157,7 @@ async def add_item_to_cart(
         precio_unitario=precio_unidad
     )
     
-    # 4. Procesar el cálculo de totales (Lógica de tu compañero adaptada a BD)
+    # 4. Procesar el cálculo de totales 
     await logica_negocio.recalcular_total_carrito_bd(cart_id)
     
     # 5. Recuperar el estado actualizado directo de la base de datos para responder
