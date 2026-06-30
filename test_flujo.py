@@ -7,13 +7,13 @@ async def test_flujo_completo():
     print(f"Carrito generado: {cart_id}")
 
     print("\n--- PASO 2: Agregando productos (Prueba de Decimales) ---")
-    # Usamos los montos del ejemplo del .md de tu compañero para probar su lógica exacta
+    # Usamos los montos de ejemplo 
     await logica_negocio.agregar_item_bd(cart_id, "PROD-A", "Teclado Mecánico", 2, 799.98)
     await logica_negocio.agregar_item_bd(cart_id, "PROD-B", "Mouse Pad", 1, 100.00)
     print("Productos agregados a la base de datos.")
 
     print("\n--- PASO 3: Recalculando totales (Lógica del compañero) ---")
-    # Esta es la nueva función que actualiza el total_amount en la tabla carts
+    # nueva función que actualiza el total_amount en la tabla carts
     await logica_negocio.recalcular_total_carrito_bd(cart_id)
     print("Totales recalculados y guardados exitosamente.")
 
@@ -27,25 +27,25 @@ async def test_flujo_completo():
     
     print(f"\nTotal general guardado en BD: ${carrito['total_price']}")
 
-    # Validación lógica: (2 * 799.99) + (1 * 100.00) = 1599.98 + 100.00 = 1699
+    # Validación lógica: (2 * 799.99) + (1 * 100.00) = 1599.98 + 100.00 = 1699 por el tema de enteros y no tener decimales
     total_esperado = 1699
     if carrito['total_price'] == total_esperado:
-        print("✅ Lógica matemática correcta: El total coincide perfectamente con los decimales.")
+        print(":D Lógica matemática correcta: El total coincide perfectamente con el valor esperado.")
     else:
-        print(f"❌ Lógica incorrecta: Esperaba {total_esperado}, obtuve {carrito['total_price']}")
+        print(f"D: Lógica incorrecta: Esperaba {total_esperado}, obtuve {carrito['total_price']}")
         
     print("\n--- PASO 5: Cerrando carrito (Intención de pedido) ---")
     await logica_negocio.cerrar_pedido(cart_id)
     
-    # Verifiquemos si el estado cambió en la base de datos
+    # Verificamos si el estado cambió en la base de datos
     conn = await logica_negocio.get_db_connection()
     status_db = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
     await conn.close()
     
     if status_db == 'PENDING':
-        print("✅ ÉXITO FINAL: El estado del carrito es PENDING. Flujo completo validado.")
+        print(":D ÉXITO FINAL: El estado del carrito es PENDING. Flujo completo validado.")
     else:
-        print(f"❌ ERROR: El estado debería ser PENDING, pero es {status_db}")
+        print(f"D: ERROR: El estado debería ser PENDING, pero es {status_db}")
         
 asyncio.run(test_flujo_completo())
 
