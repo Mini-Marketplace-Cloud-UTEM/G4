@@ -122,7 +122,14 @@ async def add_item_to_cart(
     if response.status_code == 404:
         raise HTTPException(status_code=404, detail="PRODUCTO_NO_ENCONTRADO_EN_CATALOGO")
         
-    producto_data = response.json()
+    producto_json = response.json()
+    
+    # CAPA ANTICORRUPCIÓN: Si el Grupo 3 envía el producto envuelto en "data", lo extraemos
+    if "data" in producto_json and isinstance(producto_json["data"], dict):
+        producto_data = producto_json["data"]
+    else:
+        producto_data = producto_json
+
     if producto_data.get("status") != "ACTIVE":
         raise HTTPException(status_code=400, detail="PRODUCTO_INACTIVO")
 
