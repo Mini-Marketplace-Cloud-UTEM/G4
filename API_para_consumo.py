@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 from typing import List, Optional
 import uuid
+from uuid import UUID
 import httpx
 import logica_negocio
 
@@ -25,7 +26,7 @@ app.add_middleware(
 # 1. MODELOS DE DATOS 
 # ==========================================
 class AddItemRequest(BaseModel):
-    product_id: str = Field(validation_alias=AliasChoices("productId", "product_id"))
+    product_id: UUID = Field(validation_alias=AliasChoices("productId", "product_id"))
     quantity: int = Field(gt=0, validation_alias=AliasChoices("quantity", "qty"))
     model_config = ConfigDict(populate_by_name=True)
 
