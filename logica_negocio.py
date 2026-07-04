@@ -9,8 +9,15 @@ from typing import Optional
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.stbnjjpelelbsdeudqad:2CCCzfeXw2bfZYj8@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
 
 async def get_db_connection():
-    """Establece y retorna una conexión a la base de datos PostgreSQL."""
-    return await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(DATABASE_URL)
+    # Esto le enseña a tu conexión a manejar los UUID de forma nativa
+    await conn.set_type_codec(
+        'uuid',
+        encoder=str,
+        decoder=str,
+        schema='pg_catalog'
+    )
+    return conn
 
 # ==========================================
 # FUNCIONES TRANSACCIONALES
@@ -39,10 +46,12 @@ async def agregar_item_bd(cart_id: str, product_id: str, name: str, quantity: in
     """Inserta o actualiza un producto dentro de un carrito específico en la BD castenado a UUID."""
     conn = await get_db_connection()
     try:
+        cart_id = str(cart_id)
+        product_id = str(product_id)
         subtotal = quantity * precio_unitario
         
         # Agregamos ::uuid para que asyncpg no reclame por tipos
-        check_query = "SELECT item_id, quantity FROM cart_items WHERE cart_id = $1::uuid AND product_id = $2::uuid"
+        check_query = "SELECT item_id, quantity FROM cart_items WHERE cart_id = $1::uuid AND product_id = $2"
         existing_item = await conn.fetchrow(check_query, cart_id, product_id)
 
         if existing_item:
@@ -50,14 +59,14 @@ async def agregar_item_bd(cart_id: str, product_id: str, name: str, quantity: in
             nuevo_subtotal = nueva_cantidad * precio_unitario
             update_query = """
                 UPDATE cart_items 
-                SET quantity = $1, subtotal = $2 
+                SET quantity = $1, sub_total = $2 
                 WHERE item_id = $3::uuid
             """
             await conn.execute(update_query, nueva_cantidad, nuevo_subtotal, existing_item['item_id'])
         else:
             insert_query = """
-                INSERT INTO cart_items (cart_id, product_id, name, quantity, unit_price, subtotal)
-                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
+                INSERT INTO cart_items (cart_id, product_id, name, quantity, unit_price, sub_total)
+                VALUES ($1::uuid, $2, $3, $4, $5, $6)
             """
             await conn.execute(insert_query, cart_id, product_id, name, quantity, precio_unitario, subtotal)
     finally:
@@ -74,7 +83,7 @@ async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
         if not cart_row:
             return None
 
-        items_query = "SELECT item_id, product_id, name, quantity, unit_price, subtotal FROM cart_items WHERE cart_id = $1::uuid"
+        items_query = "SELECT item_id, product_id, name, quantity, unit_price, sub_total FROM cart_items WHERE cart_id = $1::uuid"
         items_rows = await conn.fetch(items_query, cart_id)
 
         items_list = []
@@ -85,7 +94,7 @@ async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
                 "name": row["name"],
                 "quantity": row["quantity"],
                 "price": row["unit_price"], 
-                "subtotal": row["subtotal"]
+                "subtotal": row["sub_total"]
             })
 
         carrito_dict = {
@@ -98,7 +107,7 @@ async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
         return carrito_dict
     finally:
         await conn.close()
-        
+
 async def recalcular_total_carrito_bd(cart_id: str):
     """
     Suma todos los subtotales de los ítems y actualiza el total del carrito.
@@ -109,7 +118,7 @@ async def recalcular_total_carrito_bd(cart_id: str):
         query = """
             UPDATE carts 
             SET total_amount = (
-                SELECT COALESCE(SUM(subtotal), 0) 
+                SELECT COALESCE(SUM(sub_total), 0) 
                 FROM cart_items 
                 WHERE cart_id = $1
             )
@@ -119,47 +128,6 @@ async def recalcular_total_carrito_bd(cart_id: str):
     finally:
         await conn.close()
 
-async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
-    """
-    Extrae toda la información del carrito y sus ítems, estructurándola
-    exactamente como la requiere el modelo CartResponse de FastAPI.
-    """
-    conn = await get_db_connection()
-    try:
-        # 1. Obtener la cabecera del carrito
-        cart_query = "SELECT cart_id, user_id, status, total_amount FROM carts WHERE cart_id = $1"
-        cart_row = await conn.fetchrow(cart_query, cart_id)
-        
-        if not cart_row:
-            return None
-
-        # 2. Obtener los ítems
-        items_query = "SELECT item_id, product_id, name, quantity, unit_price, subtotal FROM cart_items WHERE cart_id = $1"
-        items_rows = await conn.fetch(items_query, cart_id)
-
-        # 3. Armar el diccionario para FastAPI
-        items_list = []
-        for row in items_rows:
-            items_list.append({
-                "item_id": str(row["item_id"]),
-                "product_id": str(row["product_id"]),
-                "name": row["name"],
-                "quantity": row["quantity"],
-                "price": row["unit_price"], # Se mapeará a unitPrice gracias a Pydantic
-                "subtotal": row["subtotal"]
-            })
-
-        carrito_dict = {
-            "cart_id": str(cart_row["cart_id"]),
-            "user_id": str(cart_row["user_id"]) if cart_row["user_id"] else None,
-            "status": cart_row["status"],
-            "items": items_list,
-            "total_amount": cart_row["total_amount"]
-        }
-        
-        return carrito_dict
-    finally:
-        await conn.close()
 
 async def cerrar_pedido(cart_id: str):
     """
@@ -181,7 +149,7 @@ async def actualizar_item_bd(item_id: str, quantity: int):
         if row:
             nuevo_subtotal = quantity * row['unit_price']
             await conn.execute(
-                "UPDATE cart_items SET quantity = $1, subtotal = $2 WHERE item_id = $3", 
+                "UPDATE cart_items SET quantity = $1, sub_total = $2 WHERE item_id = $3", 
                 quantity, nuevo_subtotal, item_id
             )
     finally:
