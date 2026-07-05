@@ -5,8 +5,8 @@ from typing import Optional
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SUPABASE)
 # ==========================================
-# Reemplaza esta URL con la tuya de Supabase (la que usaste ayer para la prueba)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.stbnjjpelelbsdeudqad:2CCCzfeXw2bfZYj8@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
