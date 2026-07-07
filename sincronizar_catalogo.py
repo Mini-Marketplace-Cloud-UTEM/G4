@@ -5,7 +5,7 @@ import asyncpg
 import os
 
 # 1. Obtenemos la conexión a la BD
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:LyawTfF3y87umiyM@db.etgogvgvsqepdjiuulwh.supabase.co:5432/postgres")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
