@@ -100,16 +100,22 @@ class CartResponse(BaseModel):
 ### ==========================================
 security = HTTPBearer(auto_error=False)
 
-async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
+    """
+    Se comunica con el MS del Grupo 2. 
+    Retorna el user_id (UUID) si es un cliente válido, o Nil UUID si es un invitado.
+    FUSIONADO: Incluye soporte para invitados y control de roles de admin/seller.
+    """
+    # 1. ESCENARIO INVITADO
     if not credentials:
-        raise HTTPException(status_code=401, detail="Token requerido")
+        logger.info("Sesión: INVITADO (Se guardará como NULL en la BD)")
+        return "00000000-0000-0000-0000-000000000000"
     
     token = credentials.credentials
     
-    # Llamada real al servicio de Identidad (Grupo 2) para validar el token
+    # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
-            # Reemplaza la URL por la de producción del Grupo 2 cuando la tengan
             response = await client.post(
                 "https://api-grupo2.onrender.com/api/v1/auth/validate",
                 headers={"Authorization": f"Bearer {token}"}
@@ -117,13 +123,25 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
             
             if response.status_code == 200:
                 datos_usuario = response.json()
-                # Extraemos el ID real del usuario desde el perfil validado
-                return datos_usuario["user"]["id"]
+                user_info = datos_usuario.get("user", datos_usuario)
+                
+                # 3. CONTROL DE ROLES
+                roles_usuario = user_info.get("roles", [])
+                if "admin" in roles_usuario or "seller" in roles_usuario:
+                    raise HTTPException(
+                        status_code=403, 
+                        detail={"error_code": "FORBIDDEN", "message": "ADMIN_Y_SELLER_NO_PUEDEN_TENER_CARRITO"}
+                    )
+                
+                # Extraemos el ID real del usuario
+                user_id = user_info.get("id")
+                logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {user_id}")
+                return user_id
             else:
-                raise HTTPException(status_code=401, detail="Token inválido o expirado según Grupo 2")
+                raise HTTPException(status_code=401, detail={"error_code": "UNAUTHORIZED", "message": "Token inválido o expirado según Grupo 2"})
                 
         except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="Error de comunicación con el servicio de autenticación")
+            raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
 
 
 # ==========================================
@@ -156,7 +174,7 @@ async def create_cart(
 async def get_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") # Agregado
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
@@ -164,7 +182,6 @@ async def get_cart(
         
         if resultado is None:
             logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado")
-            # Error estructurado en lugar de texto simple
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -202,7 +219,6 @@ async def add_item_to_cart(
         carro_existente = await logica_negocio.obtener_carrito_completo(cart_id)
         if not carro_existente:
             logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al agregar ítem.")
-            # Error estructurado
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -219,7 +235,6 @@ async def add_item_to_cart(
                 )
             except httpx.RequestError:
                 logger.error(f"[{x_correlation_id}] Falla al comunicarse con Catálogo para el producto {request.product_id}")
-                # Error estructurado
                 raise HTTPException(
                     status_code=503, 
                     detail={
@@ -230,7 +245,6 @@ async def add_item_to_cart(
                 )
         if response.status_code == 404:
             logger.warning(f"[{x_correlation_id}] Producto {request.product_id} no existe en catálogo.")
-            # Error estructurado
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -242,7 +256,6 @@ async def add_item_to_cart(
         
         producto_json = response.json()
 
-        # CAPA ANTICORRUPCIÓN: Si el Grupo 3 envía el producto envuelto en "data", lo extraemos
         if "data" in producto_json and isinstance(producto_json["data"], dict):
             producto_data = producto_json["data"]
         else:
@@ -250,7 +263,6 @@ async def add_item_to_cart(
 
         if producto_data.get("status") != "ACTIVE":
             logger.warning(f"[{x_correlation_id}] Producto {request.product_id} inactivo.")
-            # Error estructurado
             raise HTTPException(
                 status_code=400, 
                 detail={
@@ -273,11 +285,9 @@ async def add_item_to_cart(
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise # Dejamos pasar los errores que nosotros mismos provocamos arriba
+        raise
     except Exception as e:
-        # LOGTEAMOS EL ERROR CRÍTICO EN CONSOLA PARA RENDER
         logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
-        # DEVOLVEMOS EL ERROR ESTRUCTURADO AL CLIENTE
         raise HTTPException(
             status_code=500, 
             detail={
@@ -293,20 +303,18 @@ async def update_item_quantity(
     item_id: str, 
     request: UpdateItemRequest,
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") # 1. Agregamos el header
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Modifica la cantidad de un producto específico en el carrito."""
     try:
-        # 2. Log de inicio de la operación
         logger.info(f"[{x_correlation_id}] Usuario {user_id} actualizando cantidad a {request.quantity} para el ítem {item_id} en el carrito {cart_id}")
         
-        # Ahora adaptado para llamar a la BD en vez de a fake_carts_db
-        await logica_negocio.actualizar_item_bd(item_id, request.quantity)
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
+        await logica_negocio.actualizar_item_bd(cart_id, item_id, request.quantity)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         
-        # Validación extra de seguridad por si el carrito fue borrado entre medio
         if not resultado:
             logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar actualizar.")
             raise HTTPException(
@@ -318,17 +326,13 @@ async def update_item_quantity(
                 }
             )
             
-        # Log de éxito
         logger.info(f"[{x_correlation_id}] Ítem {item_id} actualizado exitosamente")
         return resultado
 
-    # 3. Manejo de excepciones
     except HTTPException:
-        raise # Dejamos pasar errores controlados (como el 404 de arriba)
+        raise
     except Exception as e:
-        # LOGTEAMOS EL ERROR CRÍTICO EN CONSOLA PARA RENDER
         logger.error(f"[{x_correlation_id}] Error interno al actualizar cantidad del ítem {item_id}: {str(e)}")
-        # DEVOLVEMOS EL ERROR ESTRUCTURADO AL CLIENTE
         raise HTTPException(
             status_code=500, 
             detail={
@@ -349,7 +353,8 @@ async def remove_item_from_cart(
     try: 
         logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando eliminar: {item_id} del carrito: {cart_id}")
         
-        await logica_negocio.eliminar_item_bd(item_id)
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
+        await logica_negocio.eliminar_item_bd(cart_id, item_id)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
@@ -364,7 +369,6 @@ async def remove_item_from_cart(
                 }
             )
         
-        # Log de éxito real (después de la base de datos)
         logger.info(f"[{x_correlation_id}] Ítem {item_id} eliminado exitosamente")
         return resultado
         
@@ -381,6 +385,48 @@ async def remove_item_from_cart(
             }
         )
 
+@app.patch("/v1/cart/{cart_id}/activate", tags=["Cart"])
+async def reactivate_cart(
+    cart_id: str,
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+):
+    """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
+    try:
+        logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
+        conn = await logica_negocio.get_db_connection()
+        try:
+            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+            
+            if estado_actual == 'COMPLETED':
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error_code": "CART_ALREADY_COMPLETED",
+                        "message": "El carrito ya fue pagado.",
+                        "correlation_id": x_correlation_id
+                    }
+                )
+                
+            if estado_actual == 'PENDING':
+                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
+                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+                
+            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        finally:
+            await conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[{x_correlation_id}] Error al reactivar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al reactivar el carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 # ==========================================
 # 4. ENDPOINTS DE CHECKOUT 
@@ -390,7 +436,7 @@ async def initiate_checkout(
     request: CheckoutRequest,
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") # 1. Agregamos el header
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Inicia el proceso de checkout."""
     try:
@@ -432,7 +478,6 @@ async def initiate_checkout(
             "amount": cart["total_amount"]
         }
         
-        # Log de éxito
         logger.info(f"[{x_correlation_id}] Checkout {checkout_id} iniciado exitosamente para carrito {request.cart_id}")
         return respuesta_checkout
 
@@ -453,7 +498,7 @@ async def initiate_checkout(
 async def get_checkout_status(
     checkout_id: str,
     token: HTTPAuthorizationCredentials = Depends(security),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") # 1. Agregado
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Consulta el estado de un checkout directamente en la BD."""
     try:
@@ -472,7 +517,6 @@ async def get_checkout_status(
                 }
             )
             
-        # Log de éxito
         logger.info(f"[{x_correlation_id}] Checkout {checkout_id} consultado exitosamente")
         return checkout
         
@@ -494,13 +538,12 @@ async def get_checkout_status(
 async def checkout_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") # 1. Agregado
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Marca el carrito como PENDING, indicando intención de pedido."""
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} registrando intención de pedido para carrito {cart_id}")
         
-        # Validación extra de seguridad: verificar si el carrito existe antes de cerrarlo
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
         if not cart:
             logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar hacer checkout.")
@@ -513,7 +556,6 @@ async def checkout_cart(
                 }
             )
             
-        # Acción en la base de datos
         await logica_negocio.cerrar_pedido(cart_id)
         
         logger.info(f"[{x_correlation_id}] Intención de pedido (PENDING) registrada para carrito {cart_id}")
@@ -531,6 +573,7 @@ async def checkout_cart(
                 "correlation_id": x_correlation_id
             }
         )
+
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
 ### ==========================================
@@ -590,11 +633,9 @@ async def reserve_stock(
     except Exception as e:
         mensaje_error = str(e)
         
-        # 1. CAPTURAMOS EL ERROR DE STOCK INSUFICIENTE
         if "INSUFFICIENT_STOCK" in mensaje_error:
             logger.warning(f"[{x_correlation_id}] Falló la reserva: Stock insuficiente para el producto {request.product_id}")
             
-            # --- AQUÍ ARMAMOS Y PUBLICAMOS EL EVENTO PARA G7 ---
             fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             evento_shortage = {
                 "eventId": str(uuid.uuid4()),
@@ -610,11 +651,8 @@ async def reserve_stock(
                     "occurredAt": fecha_actual
                 }
             }
-            # Simulación de publicación en Pub/Sub
             print("Publicando evento para G7:", json.dumps(evento_shortage, indent=2))
-            # ---------------------------------------------------
             
-            # Devolvemos el HTTP 409 Conflict exigido por el contrato
             raise HTTPException(
                 status_code=409, 
                 detail={
@@ -624,7 +662,6 @@ async def reserve_stock(
                 }
             )
             
-        # 2. CAPTURAMOS EL ERROR DE PRODUCTO INEXISTENTE
         elif "PRODUCT_NOT_FOUND" in mensaje_error:
             raise HTTPException(
                 status_code=404, 
@@ -635,7 +672,6 @@ async def reserve_stock(
                 }
             )
             
-        # 3. CUALQUIER OTRO ERROR DESCONOCIDO DEVUELVE 500
         logger.error(f"[{x_correlation_id}] Error interno al crear reserva: {mensaje_error}")
         raise HTTPException(
             status_code=500,
