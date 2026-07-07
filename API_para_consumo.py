@@ -98,7 +98,6 @@ class CartResponse(BaseModel):
 ### ==========================================
 ### 2. DEPENDENCIA DE AUTENTICACIÓN (GRUPO 2)
 ### ==========================================
-security = HTTPBearer(auto_error=False)
 
 async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
     """
