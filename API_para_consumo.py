@@ -10,6 +10,8 @@ from uuid import UUID
 import httpx
 import logica_negocio
 import logging
+import json
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -580,8 +582,39 @@ async def reserve_stock(
             request.product_id, request.cart_id, request.user_id, request.quantity
         )
         
-        if not resultado:
+        logger.info(f"[{x_correlation_id}] Reserva de stock para producto {request.product_id} creada exitosamente")
+        return resultado
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        mensaje_error = str(e)
+        
+        # 1. CAPTURAMOS EL ERROR DE STOCK INSUFICIENTE
+        if "INSUFFICIENT_STOCK" in mensaje_error:
             logger.warning(f"[{x_correlation_id}] Falló la reserva: Stock insuficiente para el producto {request.product_id}")
+            
+            # --- AQUÍ ARMAMOS Y PUBLICAMOS EL EVENTO PARA G7 ---
+            fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            evento_shortage = {
+                "eventId": str(uuid.uuid4()),
+                "eventType": "InventoryShortage",
+                "version": "1.0",
+                "occurredAt": fecha_actual,
+                "producer": "g4-inventario",
+                "correlationId": x_correlation_id or str(uuid.uuid4()), 
+                "payload": {
+                    "productId": request.product_id,
+                    "currentStock": 0,
+                    "requestedQuantity": request.quantity,
+                    "occurredAt": fecha_actual
+                }
+            }
+            # Simulación de publicación en Pub/Sub
+            print("Publicando evento para G7:", json.dumps(evento_shortage, indent=2))
+            # ---------------------------------------------------
+            
+            # Devolvemos el HTTP 409 Conflict exigido por el contrato
             raise HTTPException(
                 status_code=409, 
                 detail={
@@ -590,13 +623,20 @@ async def reserve_stock(
                     "correlation_id": x_correlation_id
                 }
             )
-        logger.info(f"[{x_correlation_id}] Reserva de stock para producto {request.product_id} creada exitosamente")
-        return resultado
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error al crear reserva de stock para producto {request.product_id}: {str(e)}")
+            
+        # 2. CAPTURAMOS EL ERROR DE PRODUCTO INEXISTENTE
+        elif "PRODUCT_NOT_FOUND" in mensaje_error:
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "PRODUCT_NOT_FOUND",
+                    "message": "El producto solicitado no existe.",
+                    "correlation_id": x_correlation_id
+                }
+            )
+            
+        # 3. CUALQUIER OTRO ERROR DESCONOCIDO DEVUELVE 500
+        logger.error(f"[{x_correlation_id}] Error interno al crear reserva: {mensaje_error}")
         raise HTTPException(
             status_code=500,
             detail={
