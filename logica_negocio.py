@@ -238,9 +238,10 @@ async def liberar_reserva_bd(reservation_id: str):
     try:
         query = """
         UPDATE stock_reservations
-        SET status = 'RELEASED', updated_at = NOW()
+        SET status = 'RELEASED'
         WHERE reservation_id = $1::uuid AND status = 'ACTIVE';
         """
         await conn.execute(query, reservation_id)
     finally:
         await conn.close()
+
