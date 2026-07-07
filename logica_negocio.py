@@ -8,7 +8,6 @@ from typing import Optional
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
     # Esto le ensena a tu conexion a manejar los UUID de forma nativa
