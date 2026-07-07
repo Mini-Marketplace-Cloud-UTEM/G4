@@ -3,14 +3,15 @@ import os
 from typing import Optional
 
 # ==========================================
-# CONFIGURACIÓN DE BASE DE DATOS (SUPABASE)
+# CONFIGURACION DE BASE DE DATOS (SUPABASE)
 # ==========================================
-# Reemplaza esta URL con la tuya de Supabase (la que usaste ayer para la prueba)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.stbnjjpelelbsdeudqad:2CCCzfeXw2bfZYj8@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
-    # Esto le enseña a tu conexión a manejar los UUID de forma nativa
+    # Esto le ensena a tu conexion a manejar los UUID de forma nativa
     await conn.set_type_codec(
         'uuid',
         encoder=str,
@@ -30,7 +31,7 @@ async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
     """
     conn = await get_db_connection()
     try:
-        # Insertamos el carrito con el user_id (puede ser NULL si es anónimo) y estado ACTIVE
+        # Insertamos el carrito con el user_id (puede ser NULL si es anonimo) y estado ACTIVE
         query = """
             INSERT INTO carts (user_id, status, total_amount, currency)
             VALUES ($1, 'ACTIVE', 0, 'CLP')
@@ -43,7 +44,7 @@ async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
         await conn.close()
 
 async def agregar_item_bd(cart_id: str, product_id: str, name: str, quantity: int, precio_unitario: int):
-    """Inserta o actualiza un producto dentro de un carrito específico en la BD castenado a UUID."""
+    """Inserta o actualiza un producto dentro de un carrito especifico en la BD castenado a UUID."""
     conn = await get_db_connection()
     try:
         cart_id = str(cart_id)
@@ -73,7 +74,7 @@ async def agregar_item_bd(cart_id: str, product_id: str, name: str, quantity: in
         await conn.close()
 
 async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
-    """Extrae toda la información del carrito aplicando casteo de llaves."""
+    """Extrae toda la informacion del carrito aplicando casteo de llaves."""
     conn = await get_db_connection()
     try:
         # Forzamos el tipo con ::uuid
@@ -110,7 +111,7 @@ async def obtener_carrito_completo(cart_id: str) -> Optional[dict]:
 
 async def recalcular_total_carrito_bd(cart_id: str):
     """
-    Suma todos los subtotales de los ítems y actualiza el total del carrito.
+    Suma todos los subtotales de los items y actualiza el total del carrito.
     La base de datos es la única fuente de verdad para la matemática.
     """
     conn = await get_db_connection()
@@ -141,7 +142,7 @@ async def cerrar_pedido(cart_id: str):
         await conn.close()
 
 async def actualizar_item_bd(item_id: str, quantity: int):
-    """Actualiza la cantidad de un ítem existente en el carrito."""
+    """Actualiza la cantidad de un item existente en el carrito."""
     conn = await get_db_connection()
     try:
         # Obtenemos el precio unitario actual para recalcular el subtotal
@@ -156,7 +157,7 @@ async def actualizar_item_bd(item_id: str, quantity: int):
         await conn.close()
 
 async def eliminar_item_bd(item_id: str):
-    """Elimina un ítem específico de la base de datos."""
+    """Elimina un item especifico de la base de datos."""
     conn = await get_db_connection()
     try:
         await conn.execute("DELETE FROM cart_items WHERE item_id = $1", item_id)
