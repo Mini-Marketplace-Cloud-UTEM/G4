@@ -7,7 +7,7 @@ import json
 # CONFIGURACION DE BASE DE DATOS (SUPABASE)
 # ==========================================
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("postgresql://postgres.stbnjjpelelbsdeudqad:RuVjsKr3PFdeXs0I@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
