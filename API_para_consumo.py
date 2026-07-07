@@ -100,16 +100,22 @@ class CartResponse(BaseModel):
 ### ==========================================
 security = HTTPBearer(auto_error=False)
 
-async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
+    """
+    Se comunica con el MS del Grupo 2. 
+    Retorna el user_id (UUID) si es un cliente válido, o Nil UUID si es un invitado.
+    FUSIONADO: Incluye soporte para invitados y control de roles de admin/seller.
+    """
+    # 1. ESCENARIO INVITADO
     if not credentials:
-        raise HTTPException(status_code=401, detail="Token requerido")
+        logger.info("Sesión: INVITADO (Se guardará como NULL en la BD)")
+        return "00000000-0000-0000-0000-000000000000"
     
     token = credentials.credentials
     
-    # Llamada real al servicio de Identidad (Grupo 2) para validar el token
+    # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
-            # Reemplaza la URL por la de producción del Grupo 2 cuando la tengan
             response = await client.post(
                 "https://api-grupo2.onrender.com/api/v1/auth/validate",
                 headers={"Authorization": f"Bearer {token}"}
@@ -117,13 +123,25 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
             
             if response.status_code == 200:
                 datos_usuario = response.json()
-                # Extraemos el ID real del usuario desde el perfil validado
-                return datos_usuario["user"]["id"]
+                user_info = datos_usuario.get("user", datos_usuario)
+                
+                # 3. CONTROL DE ROLES
+                roles_usuario = user_info.get("roles", [])
+                if "admin" in roles_usuario or "seller" in roles_usuario:
+                    raise HTTPException(
+                        status_code=403, 
+                        detail={"error_code": "FORBIDDEN", "message": "ADMIN_Y_SELLER_NO_PUEDEN_TENER_CARRITO"}
+                    )
+                
+                # Extraemos el ID real del usuario
+                user_id = user_info.get("id")
+                logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {user_id}")
+                return user_id
             else:
-                raise HTTPException(status_code=401, detail="Token inválido o expirado según Grupo 2")
+                raise HTTPException(status_code=401, detail={"error_code": "UNAUTHORIZED", "message": "Token inválido o expirado según Grupo 2"})
                 
         except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="Error de comunicación con el servicio de autenticación")
+            raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
 
 
 # ==========================================
