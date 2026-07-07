@@ -1,0 +1,26 @@
+name: CI Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-cov
+
+      - name: Lint y Formato (Ruff)
+        run: ruff check .
+
+      - name: Tests con 60% de cobertura mínima
+        run: pytest --cov=. --cov-fail-under=60
