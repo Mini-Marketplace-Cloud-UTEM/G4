@@ -1,6 +1,7 @@
 import asyncpg
 import os
 from typing import Optional
+import json
 
 # ==========================================
 # CONFIGURACION DE BASE DE DATOS (SUPABASE)
