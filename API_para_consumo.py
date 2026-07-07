@@ -100,19 +100,13 @@ class CartResponse(BaseModel):
 ### ==========================================
 security = HTTPBearer(auto_error=False)
 
-async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
-    """
-    Se comunica con el MS del Grupo 2. 
-    Retorna el user_id (UUID) si es un cliente válido, o Nil UUID si es un invitado.
-    FUSIONADO: Incluye soporte para invitados y control de roles de admin/seller.
-    """
-    # 1. ESCENARIO INVITADO
+async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    # Si no hay credenciales, asignamos el usuario invitado por defecto
     if not credentials:
-        logger.info("Sesión: INVITADO (Se guardará como NULL en la BD)")
+        # Retornamos el ID de invitado que el Front espera
         return "00000000-0000-0000-0000-000000000000"
     
     token = credentials.credentials
-    
     # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
