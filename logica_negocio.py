@@ -162,3 +162,84 @@ async def eliminar_item_bd(item_id: str):
         await conn.execute("DELETE FROM cart_items WHERE item_id = $1", item_id)
     finally:
         await conn.close()
+
+async def consultar_inventario_bd(product_id: str) -> Optional[dict]:
+    """
+    Consulta el stock real disponible.
+    Calcula: Stock Total (inventory) - Reservas Activas (stock_reservations)
+    """
+    conn = await get_db_connection()
+    try:
+        # Buscamos el stock base en inventory y sumamos las reservas activas
+        query = """
+        SELECT 
+            i.stock_total,
+            COALESCE((
+                SELECT SUM(quantity) 
+                FROM stock_reservations 
+                WHERE product_id = i.product_id 
+                AND status = 'ACTIVE'
+            ), 0) as reserved_quantity
+        FROM inventory i
+        WHERE i.product_id = $1::uuid;
+        """
+        row = await conn.fetchrow(query, product_id)
+        
+        if not row:
+            return None
+            
+        stock_total = row['stock_total']
+        reserved_quantity = row['reserved_quantity']
+        available_stock = stock_total - reserved_quantity
+        
+        # Retornamos el diccionario tal cual lo exige el contrato del Grupo 4
+        return {
+            "productId": product_id,
+            "stockTotal": stock_total,
+            "reservedQuantity": reserved_quantity,
+            "availableStock": available_stock
+        }
+    finally:
+        await conn.close()
+
+async def crear_reserva_bd(product_id: str, cart_id: str, user_id: str, quantity: int) -> dict:
+    """
+    Crea una reserva temporal llamando a la función almacenada 'reserve_stock' en Supabase.
+    """
+    conn = await get_db_connection()
+    try:
+        # Llamamos directamente a tu función de Supabase
+        query = "SELECT reserve_stock($1::uuid, $2::uuid, $3::uuid, $4);"
+        
+        # Obtenemos la respuesta de Supabase (que viene en formato JSON por tu RETURNS JSON)
+        resultado_string = await conn.fetchval(query, product_id, cart_id, user_id, quantity)
+        
+        # Convertimos el string a un diccionario de Python y lo retornamos
+        return json.loads(resultado_string)
+        
+    except asyncpg.exceptions.RaiseError as e:
+        # Aquí capturamos los 'RAISE EXCEPTION' que programaste en tu función SQL
+        mensaje_error = str(e)
+        if 'INSUFFICIENT_STOCK' in mensaje_error:
+            raise Exception("INSUFFICIENT_STOCK")
+        elif 'Producto no encontrado' in mensaje_error:
+            raise Exception("PRODUCT_NOT_FOUND")
+        raise Exception(f"Error en base de datos: {mensaje_error}")
+        
+    finally:
+        await conn.close()
+
+async def liberar_reserva_bd(reservation_id: str):
+    """
+    Libera anticipadamente una reserva activa (ej. si el pago es rechazado).
+    """
+    conn = await get_db_connection()
+    try:
+        query = """
+        UPDATE stock_reservations
+        SET status = 'RELEASED', updated_at = NOW()
+        WHERE reservation_id = $1::uuid AND status = 'ACTIVE';
+        """
+        await conn.execute(query, reservation_id)
+    finally:
+        await conn.close()
