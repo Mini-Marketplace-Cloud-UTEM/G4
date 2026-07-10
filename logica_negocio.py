@@ -161,7 +161,7 @@ async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
         await conn.execute(query, user_id, cart_id)
     finally:
         await conn.close()
-
+        
 async def reactivar_carrito_bd(cart_id: str):
     """Devuelve el estado de un carrito a ACTIVE (con validación estricta UUID)."""
     conn = await get_db_connection()
