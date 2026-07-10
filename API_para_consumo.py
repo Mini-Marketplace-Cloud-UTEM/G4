@@ -172,10 +172,15 @@ async def create_cart(
 async def get_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
 ):
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
+        
+        # MAGIA AQUÍ: Si el usuario es real (no es invitado), nos adueñamos del carrito
+        if user_id and user_id != "00000000-0000-0000-0000-000000000000":
+            await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
+
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         
         if resultado is None:
@@ -202,7 +207,6 @@ async def get_cart(
                 "correlation_id": x_correlation_id
             }
         )
-
 
 @app.post("/v1/cart/{cart_id}/items", response_model=CartResponse, tags=["Cart"])
 async def add_item_to_cart(
@@ -392,27 +396,13 @@ async def reactivate_cart(
     """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
     try:
         logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
-        conn = await logica_negocio.get_db_connection()
-        try:
-            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
-            
-            if estado_actual == 'COMPLETED':
-                raise HTTPException(
-                    status_code=400, 
-                    detail={
-                        "error_code": "CART_ALREADY_COMPLETED",
-                        "message": "El carrito ya fue pagado.",
-                        "correlation_id": x_correlation_id
-                    }
-                )
-                
-            if estado_actual == 'PENDING':
-                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
-                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
-                
-            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
-        finally:
-            await conn.close()
+        
+        # Usamos la función blindada con ::uuid
+        await logica_negocio.reactivar_carrito_bd(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+        return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        
     except HTTPException:
         raise
     except Exception as e:
