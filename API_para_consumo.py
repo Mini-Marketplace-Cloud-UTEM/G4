@@ -112,7 +112,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     
     token = credentials.credentials
     
-    # 2. ESCENARIO LOGUEADO
+    # 2. ESCENARIO LOGUEADO (CON LA URL CORREGIDA)
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -141,7 +141,6 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                 
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
-
 
 # ==========================================
 # 3. ENDPOINTS DE CARRITO (CART)
