@@ -116,7 +116,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                "https://grupo2-identidadusuario.onrender.com/api/auth/validate",
+                "https://grupo2-identidadusuario.onrender.com/auth/validate",
                 headers={"Authorization": f"Bearer {token}"}
             )
             
