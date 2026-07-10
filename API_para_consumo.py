@@ -21,17 +21,20 @@ logger = logging.getLogger(__name__)
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Todo lo que esté aquí se ejecuta ANTES de que la API empiece a recibir tráfico
     print("Levantando servidor del Grupo 4 (Inventario y Checkout)...")
     print("Sincronizando catálogo desde el Grupo 3...")
     
     try:
+        # Llamamos a tu función que descarga e inserta los productos
         await sincronizar_catalogo_inicial()
         print("Sincronización de arranque completada.")
     except Exception as e:
         print(f"Error al intentar sincronizar al arranque: {e}")
     
-    yield 
+    yield # Aquí la API se queda encendida y funcionando normalmente
     
+    # Lo que esté aquí abajo se ejecuta cuando Render apaga el servidor
     print("Servidor del Grupo 4 yendo a dormir...")
 
 # ==========================================
@@ -96,13 +99,13 @@ class CartResponse(BaseModel):
 ### 2. DEPENDENCIA DE AUTENTICACIÓN (GRUPO 2)
 ### ==========================================
 security = HTTPBearer(auto_error=False)
-
 async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
     """
     Se comunica con el MS del Grupo 2. 
     Retorna el user_id (UUID) si es un cliente válido, o Nil UUID si es un invitado.
+    FUSIONADO: Incluye soporte para invitados y control de roles de admin/seller.
     """
-    # 1. ESCENARIO INVITADO (Frontend no envía Token)
+    # 1. ESCENARIO INVITADO
     if not credentials:
         logger.info("Sesión: INVITADO (Se guardará como NULL en la BD)")
         return "00000000-0000-0000-0000-000000000000"
@@ -129,6 +132,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                         detail={"error_code": "FORBIDDEN", "message": "ADMIN_Y_SELLER_NO_PUEDEN_TENER_CARRITO"}
                     )
                 
+                # Extraemos el ID real del usuario
                 user_id = user_info.get("id")
                 logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {user_id}")
                 return user_id
@@ -137,6 +141,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                 
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
+
 
 # ==========================================
 # 3. ENDPOINTS DE CARRITO (CART)
@@ -168,7 +173,7 @@ async def create_cart(
 async def get_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
@@ -198,6 +203,7 @@ async def get_cart(
                 "correlation_id": x_correlation_id
             }
         )
+
 
 @app.post("/v1/cart/{cart_id}/items", response_model=CartResponse, tags=["Cart"])
 async def add_item_to_cart(
@@ -278,7 +284,7 @@ async def add_item_to_cart(
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise 
+        raise
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
         raise HTTPException(
@@ -296,13 +302,14 @@ async def update_item_quantity(
     item_id: str, 
     request: UpdateItemRequest,
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Modifica la cantidad de un producto específico en el carrito."""
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} actualizando cantidad a {request.quantity} para el ítem {item_id} en el carrito {cart_id}")
         
-        await logica_negocio.actualizar_item_bd(cart_id,item_id, request.quantity)
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
+        await logica_negocio.actualizar_item_bd(cart_id, item_id, request.quantity)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
@@ -322,7 +329,7 @@ async def update_item_quantity(
         return resultado
 
     except HTTPException:
-        raise 
+        raise
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al actualizar cantidad del ítem {item_id}: {str(e)}")
         raise HTTPException(
@@ -345,6 +352,7 @@ async def remove_item_from_cart(
     try: 
         logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando eliminar: {item_id} del carrito: {cart_id}")
         
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
         await logica_negocio.eliminar_item_bd(cart_id, item_id)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
@@ -376,6 +384,49 @@ async def remove_item_from_cart(
             }
         )
 
+@app.patch("/v1/cart/{cart_id}/activate", tags=["Cart"])
+async def reactivate_cart(
+    cart_id: str,
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+):
+    """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
+    try:
+        logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
+        conn = await logica_negocio.get_db_connection()
+        try:
+            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+            
+            if estado_actual == 'COMPLETED':
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error_code": "CART_ALREADY_COMPLETED",
+                        "message": "El carrito ya fue pagado.",
+                        "correlation_id": x_correlation_id
+                    }
+                )
+                
+            if estado_actual == 'PENDING':
+                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
+                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+                
+            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        finally:
+            await conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[{x_correlation_id}] Error al reactivar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al reactivar el carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
+
 # ==========================================
 # 4. ENDPOINTS DE CHECKOUT 
 # ==========================================
@@ -384,7 +435,7 @@ async def initiate_checkout(
     request: CheckoutRequest,
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Inicia el proceso de checkout."""
     try:
@@ -446,7 +497,7 @@ async def initiate_checkout(
 async def get_checkout_status(
     checkout_id: str,
     token: HTTPAuthorizationCredentials = Depends(security),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Consulta el estado de un checkout directamente en la BD."""
     try:
@@ -486,7 +537,7 @@ async def get_checkout_status(
 async def checkout_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     """Marca el carrito como PENDING, indicando intención de pedido."""
     try:
@@ -568,6 +619,7 @@ async def reserve_stock(
     try:
         logger.info(f"[{x_correlation_id}] Usuario {request.user_id} intentando reservar stock para producto {request.product_id} en carrito {request.cart_id}")
         
+        # Llama a tu función real para insertar la reserva en Supabase
         resultado = await logica_negocio.crear_reserva_bd(
             request.product_id, request.cart_id, request.user_id, request.quantity
         )
