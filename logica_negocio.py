@@ -151,12 +151,12 @@ async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
     """Asigna un carrito de invitado a un usuario real que acaba de iniciar sesión."""
     conn = await get_db_connection()
     try:
-        # Solo lo actualiza si el carrito no tiene dueño o es de un invitado
+        # Forzamos el ::uuid en los ceros para que Postgres lo reconozca
         query = """
             UPDATE carts 
-            SET user_id = $1 
+            SET user_id = $1::uuid 
             WHERE cart_id = $2::uuid 
-            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000')
+            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000'::uuid)
         """
         await conn.execute(query, user_id, cart_id)
     finally:
