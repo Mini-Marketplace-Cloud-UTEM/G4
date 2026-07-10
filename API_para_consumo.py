@@ -218,6 +218,12 @@ async def add_item_to_cart(
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando agregar producto {request.product_id} al carrito {cart_id}")
 
+        # --- LA MAGIA ESTÁ AQUÍ ---
+        # Si el usuario es real (inició sesión), le asignamos el carrito inmediatamente
+        if user_id and user_id != "00000000-0000-0000-0000-000000000000":
+            await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
+        # ---------------------------
+
         carro_existente = await logica_negocio.obtener_carrito_completo(cart_id)
         if not carro_existente:
             logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al agregar ítem.")
@@ -287,7 +293,7 @@ async def add_item_to_cart(
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise
+        raise 
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
         raise HTTPException(
@@ -298,7 +304,6 @@ async def add_item_to_cart(
                 "correlation_id": x_correlation_id
             }
         )
-
 @app.put("/v1/cart/{cart_id}/items/{item_id}", response_model=CartResponse, tags=["Cart"])
 async def update_item_quantity(
     cart_id: str, 
