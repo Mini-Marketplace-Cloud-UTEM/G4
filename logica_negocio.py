@@ -1,12 +1,15 @@
 import asyncpg
 import os
+import json
 from typing import Optional
+from fastapi import HTTPException
 
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SUPABASE)
 # ==========================================
-# Reemplaza esta URL con la tuya de Supabase (la que usaste ayer para la prueba)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.stbnjjpelelbsdeudqad:2CCCzfeXw2bfZYj8@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
+# Usamos os.getenv para que tome la variable de entorno en Render, 
+# pero le dejamos tu URL de fallback por si prueban en local.
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.etgogvgvsqepdjiuulwh:AoUxcctg4URGf7gl@aws-1-us-west-2.pooler.supabase.com:5432/postgres")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -20,7 +23,7 @@ async def get_db_connection():
     return conn
 
 # ==========================================
-# FUNCIONES TRANSACCIONALES
+# FUNCIONES TRANSACCIONALES DEL CARRITO
 # ==========================================
 
 async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
@@ -46,11 +49,16 @@ async def agregar_item_bd(cart_id: str, product_id: str, name: str, quantity: in
     """Inserta o actualiza un producto dentro de un carrito específico en la BD castenado a UUID."""
     conn = await get_db_connection()
     try:
+        # 1. EL CANDADO: Verificar el estado del carrito primero
+        estado_carrito = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1::uuid", cart_id)
+        
+        if estado_carrito != 'ACTIVE':
+            raise HTTPException(status_code=400, detail=f"No se puede modificar un carrito en estado {estado_carrito}")
+        
         cart_id = str(cart_id)
         product_id = str(product_id)
         subtotal = quantity * precio_unitario
         
-        # Agregamos ::uuid para que asyncpg no reclame por tipos
         check_query = "SELECT item_id, quantity FROM cart_items WHERE cart_id = $1::uuid AND product_id = $2"
         existing_item = await conn.fetchrow(check_query, cart_id, product_id)
 
@@ -128,7 +136,6 @@ async def recalcular_total_carrito_bd(cart_id: str):
     finally:
         await conn.close()
 
-
 async def cerrar_pedido(cart_id: str):
     """
     Cambia el estado del carrito de ACTIVE a PENDING (Checkout).
@@ -140,25 +147,137 @@ async def cerrar_pedido(cart_id: str):
     finally:
         await conn.close()
 
-async def actualizar_item_bd(item_id: str, quantity: int):
-    """Actualiza la cantidad de un ítem existente en el carrito."""
+async def actualizar_item_bd(cart_id: str, item_id: str, quantity: int):
+    """Actualiza la cantidad de un ítem existente validando que pertenezca al carrito y esté ACTIVO."""
     conn = await get_db_connection()
     try:
-        # Obtenemos el precio unitario actual para recalcular el subtotal
-        row = await conn.fetchrow("SELECT unit_price FROM cart_items WHERE item_id = $1", item_id)
-        if row:
-            nuevo_subtotal = quantity * row['unit_price']
-            await conn.execute(
-                "UPDATE cart_items SET quantity = $1, sub_total = $2 WHERE item_id = $3", 
-                quantity, nuevo_subtotal, item_id
-            )
+        # 1. EL CANDADO: Verificar el estado del carrito primero
+        estado_carrito = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+        
+        # Si no es ACTIVE (ej. está PENDING o COMPLETED), rebotamos la petición
+        if estado_carrito != 'ACTIVE':
+            raise HTTPException(status_code=400, detail=f"No se puede modificar un carrito en estado {estado_carrito}")
+
+        # 2. La lógica de actualización que ya teníamos
+        row = await conn.fetchrow(
+            "SELECT unit_price FROM cart_items WHERE cart_id = $1 AND item_id = $2", 
+            cart_id, item_id
+        )
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="El ítem no existe en este carrito.")
+            
+        nuevo_subtotal = quantity * row['unit_price']
+        await conn.execute(
+            "UPDATE cart_items SET quantity = $1, sub_total = $2 WHERE item_id = $3", 
+            quantity, nuevo_subtotal, item_id
+        )
     finally:
         await conn.close()
 
-async def eliminar_item_bd(item_id: str):
-    """Elimina un ítem específico de la base de datos."""
+async def eliminar_item_bd(cart_id: str, item_id: str):
+    """Elimina un ítem específico validando el carrito y su estado ACTIVO."""
     conn = await get_db_connection()
     try:
-        await conn.execute("DELETE FROM cart_items WHERE item_id = $1", item_id)
+        # 1. EL CANDADO: Verificar el estado del carrito primero
+        estado_carrito = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+        
+        # Si no es ACTIVE, bloqueamos la eliminación
+        if estado_carrito != 'ACTIVE':
+            raise HTTPException(status_code=400, detail=f"No se puede modificar un carrito en estado {estado_carrito}")
+
+        # 2. La lógica de eliminación segura
+        resultado = await conn.execute(
+            "DELETE FROM cart_items WHERE cart_id = $1 AND item_id = $2", 
+            cart_id, item_id
+        )
+        
+        if resultado == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Ítem no encontrado para eliminar.")
+    finally:
+        await conn.close()
+
+# ==========================================
+# FUNCIONES DE INVENTARIO Y RESERVAS (GRUPO 4)
+# ==========================================
+
+async def consultar_inventario_bd(product_id: str) -> Optional[dict]:
+    """
+    Consulta el stock real disponible.
+    Calcula: Stock Total (inventory) - Reservas Activas (stock_reservations)
+    """
+    conn = await get_db_connection()
+    try:
+        # Buscamos el stock base en inventory y sumamos las reservas activas
+        query = """
+        SELECT 
+            i.stock_total,
+            COALESCE((
+                SELECT SUM(quantity) 
+                FROM stock_reservations 
+                WHERE product_id = i.product_id 
+                AND status = 'ACTIVE'
+            ), 0) as reserved_quantity
+        FROM inventory i
+        WHERE i.product_id = $1::uuid;
+        """
+        row = await conn.fetchrow(query, product_id)
+        
+        if not row:
+            return None
+            
+        stock_total = row['stock_total']
+        reserved_quantity = row['reserved_quantity']
+        available_stock = stock_total - reserved_quantity
+        
+        # Retornamos el diccionario tal cual lo exige el contrato del Grupo 4
+        return {
+            "productId": product_id,
+            "stockTotal": stock_total,
+            "reservedQuantity": reserved_quantity,
+            "availableStock": available_stock
+        }
+    finally:
+        await conn.close()
+
+async def crear_reserva_bd(product_id: str, cart_id: str, user_id: str, quantity: int) -> dict:
+    """
+    Crea una reserva temporal llamando a la función almacenada 'reserve_stock' en Supabase.
+    """
+    conn = await get_db_connection()
+    try:
+        # Llamamos directamente a la función de Supabase
+        query = "SELECT reserve_stock($1::uuid, $2::uuid, $3::uuid, $4);"
+        
+        # Obtenemos la respuesta de Supabase (que viene en formato JSON por tu RETURNS JSON)
+        resultado_string = await conn.fetchval(query, product_id, cart_id, user_id, quantity)
+        
+        # Convertimos el string a un diccionario de Python y lo retornamos
+        return json.loads(resultado_string)
+        
+    except asyncpg.exceptions.RaiseError as e:
+        # Aquí capturamos los 'RAISE EXCEPTION' de la función SQL
+        mensaje_error = str(e)
+        if 'INSUFFICIENT_STOCK' in mensaje_error:
+            raise Exception("INSUFFICIENT_STOCK")
+        elif 'Producto no encontrado' in mensaje_error:
+            raise Exception("PRODUCT_NOT_FOUND")
+        raise Exception(f"Error en base de datos: {mensaje_error}")
+        
+    finally:
+        await conn.close()
+
+async def liberar_reserva_bd(reservation_id: str):
+    """
+    Libera anticipadamente una reserva activa (ej. si el pago es rechazado).
+    """
+    conn = await get_db_connection()
+    try:
+        query = """
+        UPDATE stock_reservations
+        SET status = 'RELEASED'
+        WHERE reservation_id = $1::uuid AND status = 'ACTIVE';
+        """
+        await conn.execute(query, reservation_id)
     finally:
         await conn.close()
