@@ -147,6 +147,35 @@ async def cerrar_pedido(cart_id: str):
     finally:
         await conn.close()
 
+async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
+    """Asigna un carrito de invitado a un usuario real que acaba de iniciar sesión."""
+    conn = await get_db_connection()
+    try:
+        # Solo lo actualiza si el carrito no tiene dueño o es de un invitado
+        query = """
+            UPDATE carts 
+            SET user_id = $1 
+            WHERE cart_id = $2::uuid 
+            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000')
+        """
+        await conn.execute(query, user_id, cart_id)
+    finally:
+        await conn.close()
+
+async def reactivar_carrito_bd(cart_id: str):
+    """Devuelve el estado de un carrito a ACTIVE (con validación estricta UUID)."""
+    conn = await get_db_connection()
+    try:
+        estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1::uuid", cart_id)
+        
+        if estado_actual == 'COMPLETED':
+            raise HTTPException(status_code=400, detail="El carrito ya fue pagado.")
+            
+        if estado_actual == 'PENDING':
+            await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1::uuid", cart_id)
+    finally:
+        await conn.close()
+
 async def actualizar_item_bd(cart_id: str, item_id: str, quantity: int):
     """Actualiza la cantidad de un ítem existente validando que pertenezca al carrito y esté ACTIVO."""
     conn = await get_db_connection()
