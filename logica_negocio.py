@@ -148,17 +148,18 @@ async def cerrar_pedido(cart_id: str):
         await conn.close()
 
 async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
-    """Asigna un carrito de invitado a un usuario real que acaba de iniciar sesión."""
+    """Asigna un carrito de invitado a un usuario real de forma segura."""
     conn = await get_db_connection()
     try:
-        # Forzamos el ::uuid en los ceros para que Postgres lo reconozca
+        # Actualizamos SOLO si el carrito no tiene dueño o tiene el ID de ceros
         query = """
             UPDATE carts 
-            SET user_id = $1::uuid 
-            WHERE cart_id = $2::uuid 
-            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000'::uuid)
+            SET user_id = $1 
+            WHERE cart_id = $2 
+            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000')
         """
-        await conn.execute(query, user_id, cart_id)
+        resultado = await conn.execute(query, user_id, cart_id)
+        print(f"DEBUG Asignación: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
         
