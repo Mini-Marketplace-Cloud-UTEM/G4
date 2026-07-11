@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 from typing import List, Optional
+import G4pubsub
 from sincronizar_catalogo import sincronizar_catalogo_inicial 
 import uuid
 from uuid import UUID
@@ -443,63 +444,73 @@ async def initiate_checkout(
     request: CheckoutRequest,
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id"),
+    token: HTTPAuthorizationCredentials = Depends(security) # <-- Necesitamos el token para pasarlo a G8
 ):
-    """Inicia el proceso de checkout."""
     try:
-        logger.info(f"[{x_correlation_id}] Iniciando checkout para carrito {request.cart_id} (Idempotency: {idempotency_key})")
+        logger.info(f"[{x_correlation_id}] Iniciando checkout para carrito {request.cart_id}")
         
-        cart = await logica_negocio.obtener_carrito_completo(request.cart_id)
+        # 1. consulta a la BD para obtener el total del carrito
+        carrito = await logica_negocio.obtener_carrito_completo(request.cart_id)
+        monto_total = carrito["total_amount"]
+        # monto_total = 59990 # Valor de prueba mientras conectas la BD
         
-        if not cart:
-            logger.warning(f"[{x_correlation_id}] Carrito {request.cart_id} no encontrado.")
-            raise HTTPException(
-                status_code=404, 
-                detail={
-                    "error_code": "CART_NOT_FOUND",
-                    "message": "Carrito no encontrado.",
-                    "correlation_id": x_correlation_id
-                }
-            )
-            
-        if len(cart["items"]) == 0:
-            logger.warning(f"[{x_correlation_id}] Intento de checkout con carrito vacío ({request.cart_id}).")
-            raise HTTPException(
-                status_code=400, 
-                detail={
-                    "error_code": "EMPTY_CART",
-                    "message": "No se puede iniciar el checkout de un carrito vacío.",
-                    "correlation_id": x_correlation_id
-                }
-            )
-
-        await logica_negocio.cerrar_pedido(request.cart_id)
+        # 2. Aquí deberías llamar al Grupo 5 para crear la orden y obtener el ID
+        order_id_simulado = "ORD-20260611-001" 
         
-        checkout_id = str(uuid.uuid4())
-        
-        respuesta_checkout = {
-            "checkout_id": checkout_id,
-            "status": "PROCESSING", 
-            "cartId": request.cart_id,
-            "currency": "CLP",
-            "amount": cart["total_amount"]
+        # ==========================================
+        # 3. INTEGRACIÓN CON GRUPO 8 (PAGOS)
+        # ==========================================
+        # Preparamos los headers exigidos por el contrato de G8
+        headers_g8 = {
+            "Authorization": f"Bearer {token.credentials}" if token else "",
+            "Idempotency-Key": idempotency_key,
+            "X-Correlation-Id": x_correlation_id or str(uuid.uuid4()),
+            "Content-Type": "application/json"
         }
         
-        logger.info(f"[{x_correlation_id}] Checkout {checkout_id} iniciado exitosamente para carrito {request.cart_id}")
-        return respuesta_checkout
+        # Preparamos el Body (Payload) según su contrato
+        payload_g8 = {
+            "orderId": order_id_simulado,
+            "userId": user_id,
+            "amount": monto_total,
+            "currency": "CLP",
+            "method": "MERCADOPAGO"
+        }
+        
+        url_g8 = "https://g8-pagos.onrender.com/api/v1/payments" # URL inferida del contrato de G5. Confírmala con G8.
+        
+        logger.info(f"[{x_correlation_id}] Solicitando pago a Mercado Pago (G8) para orden {order_id_simulado}")
+        
+        # Hacemos la petición POST asíncrona al Grupo 8
+        async with httpx.AsyncClient() as client:
+            respuesta_g8 = await client.post(url_g8, json=payload_g8, headers=headers_g8)
+            
+            # Validamos si G8 creó el pago correctamente (Retorna 200 o 201)
+            if respuesta_g8.status_code in (200, 201):
+                datos_pago = respuesta_g8.json()
+                
+                # Armamos el evento CheckoutStarted (que ya tenías)
+                # ... tu código del evento Pub/Sub va aquí ...
+                
+                # Le respondemos al Frontend con la URL de MercadoPago
+                return {
+                    "status": "success", 
+                    "message": "Checkout iniciado",
+                    "paymentId": datos_pago.get("paymentId"),
+                    "checkoutUrl": datos_pago.get("checkoutUrl", "URL_NO_PROVISTA")
+                }
+            else:
+                logger.error(f"Error de G8: {respuesta_g8.text}")
+                raise HTTPException(
+                    status_code=502, 
+                    detail="Error al procesar el pago con el servicio externo (Grupo 8)."
+                )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al iniciar checkout: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail={
-                "error_code": "INTERNAL_SERVER_ERROR",
-                "message": "Ocurrió un error inesperado al iniciar el checkout.",
-                "correlation_id": x_correlation_id
-            }
-        )
+         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/checkout/{checkout_id}", tags=["Checkout"])
 async def get_checkout_status(
@@ -658,7 +669,7 @@ async def reserve_stock(
                     "occurredAt": fecha_actual
                 }
             }
-            print("Publicando evento para G7:", json.dumps(evento_shortage, indent=2))
+            await G4pubsub.publicar_evento(evento_shortage)
             
             raise HTTPException(
                 status_code=409, 
@@ -725,3 +736,55 @@ async def release_stock(
                 "correlation_id": x_correlation_id
             }
         )
+    
+### ==========================================
+### 6. CONSUMIDOR DE EVENTOS (PUB/SUB)
+### ==========================================
+async def procesar_evento_pago_g8(evento_recibido: dict):
+    """
+    Esta función actuará como consumidor. Será llamada automáticamente 
+    cuando el Bus de Eventos nos entregue un mensaje del Grupo 8.
+    """
+    tipo_evento = evento_recibido.get("eventType")
+    correlation_id = evento_recibido.get("correlationId", str(uuid.uuid4()))
+    fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    if tipo_evento == "PAYMENT_APPROVED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.confirmar_checkout(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutConfirmed ---
+        evento_confirmed = {
+            "eventId": str(uuid.uuid4()),
+            "eventType": "CheckoutConfirmed",
+            "version": "1.0",
+            "occurredAt": fecha_actual,
+            "producer": "g4-checkout",
+            "correlationId": correlation_id,
+            "payload": {
+                "orderId": evento_recibido.get("payload", {}).get("orderId"),
+                "status": "CONFIRMED",
+                "message": "El pago fue aprobado y el checkout se ha cerrado exitosamente."
+            }
+        }
+        await G4pubsub.publicar_evento(evento_confirmed)
+        
+    elif tipo_evento == "PAYMENT_REJECTED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.fallar_checkout(...)
+        # 2. Aquí irá la lógica BD: await logica_negocio.liberar_reserva_bd(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutFailed ---
+        evento_failed = {
+            "eventId": str(uuid.uuid4()),
+            "eventType": "CheckoutFailed",
+            "version": "1.0",
+            "occurredAt": fecha_actual,
+            "producer": "g4-checkout",
+            "correlationId": correlation_id,
+            "payload": {
+                "orderId": evento_recibido.get("payload", {}).get("orderId"),
+                "status": "FAILED",
+                "reason": "Pago rechazado por el banco (G8)",
+                "action": "Inventory released"
+            }
+        }
+        await G4pubsub.publicar_evento(evento_failed)

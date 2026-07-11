@@ -6,6 +6,7 @@ WORKDIR /app
 
 # 3. Copiamos el archivo de requerimientos y los instalamos
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. Copiamos todo nuestro código (el main.py) al contenedor
