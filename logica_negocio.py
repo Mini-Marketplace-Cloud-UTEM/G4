@@ -316,3 +316,12 @@ async def liberar_reserva_bd(reservation_id: str):
         await conn.execute(query, reservation_id)
     finally:
         await conn.close()
+async def completar_pedido_bd(cart_id: str):
+    """Cambia el estado del carrito a COMPLETED tras un pago exitoso."""
+    conn = await get_db_connection()
+    try:
+        query = "UPDATE carts SET status = 'COMPLETED' WHERE cart_id = $1"
+        resultado = await conn.execute(query, cart_id)
+        print(f"DEBUG Pago Exitoso: {resultado} para el carrito {cart_id}")
+    finally:
+        await conn.close()
