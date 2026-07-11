@@ -566,6 +566,41 @@ async def checkout_cart(
                 "correlation_id": x_correlation_id
             }
         )
+@app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
+async def complete_checkout(
+    cart_id: str,
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+):
+    """Marca el carrito como COMPLETED definitivo tras confirmar el pago."""
+    try:
+        logger.info(f"[{x_correlation_id}] Confirmando pago y cerrando carrito {cart_id} a COMPLETED")
+        
+        # 1. Verificamos que el carrito exista
+        cart = await logica_negocio.obtener_carrito_completo(cart_id)
+        if not cart:
+            raise HTTPException(
+                status_code=404, 
+                detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado"}
+            )
+            
+        # 2. Pasamos el estado a COMPLETED en la BD
+        await logica_negocio.completar_pedido_bd(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} completado con éxito")
+        return {"message": "Pago confirmado, carrito cerrado exitosamente", "status": "COMPLETED"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[{x_correlation_id}] Error al completar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error interno al cerrar el pedido."
+            }
+        )
 
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
