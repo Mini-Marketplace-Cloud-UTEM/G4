@@ -29,11 +29,15 @@ async def get_db_connection():
 async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
     """
     Crea un nuevo carrito en la base de datos.
-    Si el Grupo 2 nos entrega un user_id, lo asocia inmediatamente.
+    Si no se envía un user_id (como en el caso de los tests o invitados), 
+    se asigna el UUID de ceros por defecto para evitar errores de restricción NOT NULL.
     """
     conn = await get_db_connection()
     try:
-        # Insertamos el carrito con el user_id (puede ser NULL si es anónimo) y estado ACTIVE
+        # Si llega un None, lo transformamos en el ID de invitado
+        if not user_id:
+            user_id = '00000000-0000-0000-0000-000000000000'
+
         query = """
             INSERT INTO carts (user_id, status, total_amount, currency)
             VALUES ($1, 'ACTIVE', 0, 'CLP')
