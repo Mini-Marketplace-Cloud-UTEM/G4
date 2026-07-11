@@ -112,7 +112,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     
     token = credentials.credentials
     
-    # 2. ESCENARIO LOGUEADO (CON LA URL CORREGIDA)
+    # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -172,7 +172,7 @@ async def create_cart(
 async def get_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
@@ -293,7 +293,7 @@ async def add_item_to_cart(
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise 
+        raise
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
         raise HTTPException(
@@ -401,13 +401,27 @@ async def reactivate_cart(
     """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
     try:
         logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
-        
-        # Usamos la función blindada con ::uuid
-        await logica_negocio.reactivar_carrito_bd(cart_id)
-        
-        logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
-        return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
-        
+        conn = await logica_negocio.get_db_connection()
+        try:
+            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+            
+            if estado_actual == 'COMPLETED':
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error_code": "CART_ALREADY_COMPLETED",
+                        "message": "El carrito ya fue pagado.",
+                        "correlation_id": x_correlation_id
+                    }
+                )
+                
+            if estado_actual == 'PENDING':
+                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
+                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+                
+            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        finally:
+            await conn.close()
     except HTTPException:
         raise
     except Exception as e:
