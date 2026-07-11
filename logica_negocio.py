@@ -164,19 +164,20 @@ async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
         await conn.close()
         
 async def reactivar_carrito_bd(cart_id: str):
-    """Devuelve el estado de un carrito a ACTIVE (con validación estricta UUID)."""
+    """Fuerza el estado del carrito de vuelta a ACTIVE si el usuario cancela."""
     conn = await get_db_connection()
     try:
-        estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1::uuid", cart_id)
-        
-        if estado_actual == 'COMPLETED':
-            raise HTTPException(status_code=400, detail="El carrito ya fue pagado.")
-            
-        if estado_actual == 'PENDING':
-            await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1::uuid", cart_id)
+        # Solo actualizamos si actualmente está PENDING.
+        # Si está ACTIVE no hace nada, si está COMPLETED lo ignora.
+        query = """
+            UPDATE carts 
+            SET status = 'ACTIVE' 
+            WHERE cart_id = $1 AND status = 'PENDING'
+        """
+        resultado = await conn.execute(query, cart_id)
+        print(f"DEBUG Reactivación: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
-
 async def actualizar_item_bd(cart_id: str, item_id: str, quantity: int):
     """Actualiza la cantidad de un ítem existente validando que pertenezca al carrito y esté ACTIVO."""
     conn = await get_db_connection()
