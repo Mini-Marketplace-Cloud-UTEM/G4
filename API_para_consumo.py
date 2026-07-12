@@ -661,7 +661,7 @@ async def cancel_checkout(
 
         # 1. Llamar al DELETE de Inventario para liberar el stock
         # Asumimos que la URL base de tu inventario es esta (¡Cámbiala si es otra!)
-        url_inventario_base = "https://URL_DE_TU_INVENTARIO/v1/stock/reservations"
+        url_inventario_base = "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations"
         
         # Opcional: Si en tu base de datos guardaste un reservation_id, lo usas. 
         # Si tu sistema usa el mismo cart_id como ID de reserva (muy común), mandamos el cart_id.
