@@ -9,7 +9,7 @@ from fastapi import HTTPException
 # ==========================================
 # Usamos os.getenv para que tome la variable de entorno en Render, 
 # pero le dejamos tu URL de fallback por si prueban en local.
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.etgogvgvsqepdjiuulwh:apm0xNrZAPYlvgKP@aws-1-us-west-2.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.stbnjjpelelbsdeudqad:Kz2GpXLCr7tEgDcQ@aws-1-us-east-1.pooler.supabase.com:5432/postgres")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
