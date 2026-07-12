@@ -570,7 +570,7 @@ async def checkout_cart(
         logger.info(f"[{x_correlation_id}] Orquestación completa. Redirigiendo a pago.")
         return {
             "message": "Checkout iniciado correctamente",
-            "status": "PENDING_PAYMENT",
+            "status": "PENDING",
             "orderId": order_id,
             "paymentUrl": datos_pago.get("checkoutUrl") 
         }
