@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 from typing import List, Optional
+import G4pubsub
 from sincronizar_catalogo import sincronizar_catalogo_inicial 
 import uuid
 from uuid import UUID
@@ -12,6 +13,7 @@ import logica_negocio
 import logging
 import json
 from datetime import datetime, timezone
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -112,7 +114,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     
     token = credentials.credentials
     
-    # 2. ESCENARIO LOGUEADO (CON LA URL CORREGIDA)
+    # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -141,6 +143,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                 
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
+
 
 # ==========================================
 # 3. ENDPOINTS DE CARRITO (CART)
@@ -304,6 +307,7 @@ async def add_item_to_cart(
                 "correlation_id": x_correlation_id
             }
         )
+
 @app.put("/v1/cart/{cart_id}/items/{item_id}", response_model=CartResponse, tags=["Cart"])
 async def update_item_quantity(
     cart_id: str, 
@@ -504,6 +508,7 @@ async def checkout_cart(
                 "correlation_id": x_correlation_id
             }
         )
+#Esto le falta al QA. Debo agregarlo
 @app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
 async def complete_checkout(
     cart_id: str,
@@ -539,7 +544,6 @@ async def complete_checkout(
                 "message": "Error interno al cerrar el pedido."
             }
         )
-
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
 ### ==========================================
@@ -684,3 +688,67 @@ async def release_stock(
                 "correlation_id": x_correlation_id
             }
         )
+
+### ==========================================
+### 6. CONSUMIDOR DE EVENTOS (PUB/SUB)
+### ==========================================
+async def procesar_evento_pago_g8(evento_recibido: dict):
+    """
+    Esta función actuará como consumidor. Será llamada automáticamente 
+    cuando el Bus de Eventos nos entregue un mensaje del Grupo 8.
+    """
+    tipo_evento = evento_recibido.get("eventType")
+    correlation_id = evento_recibido.get("correlationId", str(uuid.uuid4()))
+    fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    if tipo_evento == "PAYMENT_APPROVED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.confirmar_checkout(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutConfirmed ---
+        evento_confirmed = {
+            "eventId": str(uuid.uuid4()),
+            "eventType": "CheckoutConfirmed",
+            "version": "1.0",
+            "occurredAt": fecha_actual,
+            "producer": "g4-checkout",
+            "correlationId": correlation_id,
+            "payload": {
+                "orderId": evento_recibido.get("payload", {}).get("orderId"),
+                "status": "CONFIRMED",
+                "message": "El pago fue aprobado y el checkout se ha cerrado exitosamente."
+            }
+        }
+        await G4pubsub.publicar_evento(evento_confirmed)
+        
+    elif tipo_evento == "PAYMENT_REJECTED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.fallar_checkout(...)
+        # 2. Aquí irá la lógica BD: await logica_negocio.liberar_reserva_bd(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutFailed ---
+        evento_failed = {
+            "eventId": str(uuid.uuid4()),
+            "eventType": "CheckoutFailed",
+            "version": "1.0",
+            "occurredAt": fecha_actual,
+            "producer": "g4-checkout",
+            "correlationId": correlation_id,
+            "payload": {
+                "orderId": evento_recibido.get("payload", {}).get("orderId"),
+                "status": "FAILED",
+                "reason": "Pago rechazado por el banco (G8)",
+                "action": "Inventory released"
+            }
+        }
+        await G4pubsub.publicar_evento(evento_failed)
+
+async def tarea_ttl_carritos():
+    """Ciclo infinito que corre en segundo plano cada 5 minutos."""
+    while True:
+        await asyncio.sleep(300)  # Espera 5 minutos (300 segundos)
+        print("INFO: Ejecutando limpieza de carritos PENDING...")
+        await logica_negocio.limpiar_carritos_huerfanos_bd()
+
+@app.on_event("startup")
+async def iniciar_tareas_segundo_plano():
+    """Se ejecuta automáticamente cuando arrancas el servidor en Render."""
+    asyncio.create_task(tarea_ttl_carritos())
