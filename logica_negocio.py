@@ -9,7 +9,7 @@ from fastapi import HTTPException
 # ==========================================
 # Usamos os.getenv para que tome la variable de entorno en Render, 
 # pero le dejamos tu URL de fallback por si prueban en local.
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.etgogvgvsqepdjiuulwh:AoUxcctg4URGf7gl@aws-1-us-west-2.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.etgogvgvsqepdjiuulwh:apm0xNrZAPYlvgKP@aws-1-us-west-2.pooler.supabase.com:5432/postgres")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -323,5 +323,40 @@ async def completar_pedido_bd(cart_id: str):
         query = "UPDATE carts SET status = 'COMPLETED' WHERE cart_id = $1"
         resultado = await conn.execute(query, cart_id)
         print(f"DEBUG Pago Exitoso: {resultado} para el carrito {cart_id}")
+    finally:
+        await conn.close()
+
+async def limpiar_carritos_huerfanos_bd():
+    """
+    Busca carritos atorados en PENDING por más de 15 minutos,
+    los devuelve a ACTIVE y libera el stock reservado.
+    """
+    conn = await get_db_connection()
+    try:
+        # 1. Identificar y devolver los carritos a ACTIVE
+        query_carts = """
+            UPDATE carts 
+            SET status = 'ACTIVE' 
+            WHERE status = 'PENDING' 
+            AND updated_at < NOW() - INTERVAL '15 minutes'
+            RETURNING cart_id;
+        """
+        carritos_rescatados = await conn.fetch(query_carts)
+        
+        # 2. Si encontramos carritos colgados, liberamos su stock
+        if carritos_rescatados:
+            for row in carritos_rescatados:
+                cart_id = str(row['cart_id'])
+                print(f"INFO TTL: Liberando carrito huérfano {cart_id}")
+                
+                query_reservas = """
+                    UPDATE stock_reservations
+                    SET status = 'RELEASED'
+                    WHERE cart_id = $1::uuid AND status = 'ACTIVE';
+                """
+                await conn.execute(query_reservas, cart_id)
+                
+    except Exception as e:
+        print(f"ERROR TTL: Fallo al limpiar carritos huérfanos - {str(e)}")
     finally:
         await conn.close()
