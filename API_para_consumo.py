@@ -641,6 +641,52 @@ async def complete_checkout(
                 "message": "Error interno al cerrar el pedido."
             }
         )
+@app.patch("/v1/cart/{cart_id}/cancel_checkout", tags=["Checkout"])
+async def cancel_checkout(
+    cart_id: str, 
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+):
+    """
+    Cancela un proceso de checkout en curso:
+    1. Libera las reservas de stock en el inventario.
+    2. Devuelve el carrito al estado ACTIVE.
+    """
+    try:
+        logger.info(f"[{x_correlation_id}] Cancelando checkout para carrito {cart_id}")
+        
+        cart = await logica_negocio.obtener_carrito_completo(cart_id)
+        if not cart:
+            raise HTTPException(status_code=404, detail="Carrito no encontrado.")
+
+        # 1. Llamar al DELETE de Inventario para liberar el stock
+        # Asumimos que la URL base de tu inventario es esta (¡Cámbiala si es otra!)
+        url_inventario_base = "https://URL_DE_TU_INVENTARIO/v1/stock/reservations"
+        
+        # Opcional: Si en tu base de datos guardaste un reservation_id, lo usas. 
+        # Si tu sistema usa el mismo cart_id como ID de reserva (muy común), mandamos el cart_id.
+        reserva_id = cart_id 
+        
+        async with httpx.AsyncClient() as client:
+            respuesta_inv = await client.delete(f"{url_inventario_base}/{reserva_id}")
+            if respuesta_inv.status_code not in (200, 204):
+                logger.warning(f"[{x_correlation_id}] No se pudo liberar stock o no había reserva activa: {respuesta_inv.text}")
+                # No lanzamos error para no bloquear al usuario, pero lo logueamos
+
+        # 2. Devolver el carrito a ACTIVE
+        await logica_negocio.reactivar_carrito_bd(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Checkout cancelado. Carrito {cart_id} vuelve a ACTIVE.")
+        return {
+            "message": "Checkout cancelado. Los productos han sido devueltos a la tienda.",
+            "status": "ACTIVE"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[{x_correlation_id}] Error al cancelar checkout: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno al intentar cancelar el checkout.")
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
 ### ==========================================
