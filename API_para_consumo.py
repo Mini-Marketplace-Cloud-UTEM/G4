@@ -97,6 +97,16 @@ class CartResponse(BaseModel):
     total_amount: int = Field(0, serialization_alias="totalAmount")
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
+class ShippingAddress(BaseModel):
+    street: str
+    city: str
+    region: str
+    country: str
+    postal_code: str = Field(validation_alias=AliasChoices("postalCode", "postal_code"))
+
+class CheckoutPayload(BaseModel):
+    shippingAddress: ShippingAddress
+    notes: Optional[str] = ""
 ### ==========================================
 ### 2. DEPENDENCIA DE AUTENTICACIÓN (GRUPO 2)
 ### ==========================================
@@ -469,45 +479,111 @@ async def get_checkout_status(
         )
 
 
-@app.post("/v1/cart/{cart_id}/checkout", tags=["Cart"])
+@app.post("/v1/cart/{cart_id}/checkout", tags=["Checkout"])
 async def checkout_cart(
     cart_id: str, 
+    request_body: CheckoutPayload, # Recibimos la dirección del Front
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id"),
+    token: HTTPAuthorizationCredentials = Depends(security)
 ):
-    """Marca el carrito como PENDING, indicando intención de pedido."""
+    """
+    Orquestador de Checkout Final:
+    1. Bloquea el carrito (PENDING).
+    2. Llama a G5 enviando ítems y dirección para obtener orderId.
+    3. Llama a G8 con el orderId para iniciar el pago.
+    """
     try:
-        logger.info(f"[{x_correlation_id}] Usuario {user_id} registrando intención de pedido para carrito {cart_id}")
+        logger.info(f"[{x_correlation_id}] Orquestando checkout para carrito {cart_id}")
         
+        # --- 1. BLOQUEAR CARRITO ---
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
-        if not cart:
-            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar hacer checkout.")
-            raise HTTPException(
-                status_code=404, 
-                detail={
-                    "error_code": "CART_NOT_FOUND",
-                    "message": "Carrito no encontrado.",
-                    "correlation_id": x_correlation_id
-                }
-            )
+        if not cart or not cart["items"]:
+            raise HTTPException(status_code=400, detail="Carrito no encontrado o vacío.")
+
+        await logica_negocio.cerrar_pedido(cart_id) 
+
+        # --- 2. LLAMAR A G5 (PEDIDOS) ---
+        url_g5 = "https://api-grupo5-pedidos.onrender.com/orders"
+        
+        headers_g5 = {
+            "Idempotency-Key": str(uuid.uuid4()), # G5 lo exige
+            "X-Correlation-Id": x_correlation_id or str(uuid.uuid4()),
+            "Authorization": f"Bearer {token.credentials}" if token else ""
+        }
+        
+        # Mapeamos los items exactamente a como los pide G5 (snake_case)
+        items_g5 = [
+            {
+                "product_id": item["product_id"],
+                "name": item["name"],
+                "quantity": item["quantity"],
+                "unit_price": item["price"],
+                "subtotal": item["subtotal"]
+            } for item in cart["items"]
+        ]
+        
+        payload_g5 = {
+            "userId": user_id,
+            "items": items_g5,
+            "shippingAddress": request_body.shippingAddress.model_dump(by_alias=True),
+            "notes": request_body.notes
+        }
+        
+        async with httpx.AsyncClient() as client:
+            respuesta_g5 = await client.post(url_g5, json=payload_g5, headers=headers_g5, timeout=15.0)
+            if respuesta_g5.status_code not in (200, 201):
+                await logica_negocio.reactivar_carrito_bd(cart_id)
+                logger.error(f"[{x_correlation_id}] Error G5: {respuesta_g5.text}")
+                raise HTTPException(status_code=502, detail="Error al crear el pedido en G5")
+                
+            datos_g5 = respuesta_g5.json()
+            order_id = datos_g5.get("orderId") 
+
+        # --- 3. LLAMAR A G8 (PAGOS) ---
+        url_g8 = "https://g8-pagos-y-notificaciones.onrender.com/v1/payments"
+        
+        headers_g8 = {
+            "Idempotency-Key": str(uuid.uuid4()), # G8 también lo exige
+            "Authorization": f"Bearer {token.credentials}" if token else "",
+            "X-Correlation-Id": x_correlation_id or ""
+        }
+        
+        payload_g8 = {
+            "orderId": order_id, 
+            "userId": user_id,
+            "amount": cart["total_amount"],
+            "currency": "CLP",
+            "method": "MERCADOPAGO"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            respuesta_g8 = await client.post(url_g8, json=payload_g8, headers=headers_g8, timeout=15.0)
+            if respuesta_g8.status_code not in (200, 201):
+                await logica_negocio.reactivar_carrito_bd(cart_id)
+                logger.error(f"[{x_correlation_id}] Error G8: {respuesta_g8.text}")
+                raise HTTPException(status_code=502, detail="Error al iniciar el pago en G8")
+                
+            datos_pago = respuesta_g8.json()
             
-        await logica_negocio.cerrar_pedido(cart_id)
-        
-        logger.info(f"[{x_correlation_id}] Intención de pedido (PENDING) registrada para carrito {cart_id}")
-        return {"message": "Intención de pedido registrada correctamente", "status": "PENDING"}
-        
+        # --- 4. RESPONDER AL FRONTEND ---
+        logger.info(f"[{x_correlation_id}] Orquestación completa. Redirigiendo a pago.")
+        return {
+            "message": "Checkout iniciado correctamente",
+            "status": "PENDING_PAYMENT",
+            "orderId": order_id,
+            "paymentUrl": datos_pago.get("checkoutUrl") 
+        }
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al procesar checkout del carrito {cart_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail={
-                "error_code": "INTERNAL_SERVER_ERROR",
-                "message": "Error al registrar la intención de pedido.",
-                "correlation_id": x_correlation_id
-            }
-        )
+        logger.error(f"[{x_correlation_id}] Error crítico: {str(e)}")
+        try:
+            await logica_negocio.reactivar_carrito_bd(cart_id)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail="Error interno durante el orquestado de checkout")
 #Esto le falta al QA. Debo agregarlo
 @app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
 async def complete_checkout(
