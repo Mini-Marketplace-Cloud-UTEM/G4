@@ -1,4 +1,3 @@
-import asyncio
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -19,20 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# TAREA EN SEGUNDO PLANO (CRON JOB - TTL)
-# ==========================================
-async def tarea_ttl_carritos():
-    """Ciclo infinito que corre en segundo plano cada 5 minutos para liberar stock."""
-    while True:
-        await asyncio.sleep(300)  # Espera 5 minutos (300 segundos)
-        logger.info("INFO TTL: Ejecutando limpieza de carritos PENDING (15 min)...")
-        try:
-            await logica_negocio.limpiar_carritos_huerfanos_bd()
-        except Exception as e:
-            logger.error(f"ERROR TTL: Fallo en tarea de fondo - {str(e)}")
-
-# ==========================================
-# CICLO DE VIDA DE LA API (Startup & Shutdown)
+# CICLO DE VIDA DE LA API (Startup)
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,27 +27,24 @@ async def lifespan(app: FastAPI):
     print("Sincronizando catálogo desde el Grupo 3...")
     
     try:
+        # Llamamos a tu función que descarga e inserta los productos
         await sincronizar_catalogo_inicial()
         print("Sincronización de arranque completada.")
     except Exception as e:
         print(f"Error al intentar sincronizar al arranque: {e}")
     
-    # 🚀 INICIAMOS LA TAREA DEL TTL EN SEGUNDO PLANO
-    tarea_background = asyncio.create_task(tarea_ttl_carritos())
-    
     yield # Aquí la API se queda encendida y funcionando normalmente
     
     # Lo que esté aquí abajo se ejecuta cuando Render apaga el servidor
     print("Servidor del Grupo 4 yendo a dormir...")
-    tarea_background.cancel() # Apagamos la tarea de forma limpia
 
 # ==========================================
 # INICIALIZACIÓN DE FASTAPI
 # ==========================================
 app = FastAPI(
-    title="Grupo 4 - Cart, Checkout and Inventory API QA/PROD",
-    description="API real construida en FastAPI. Integración con G1, G2, G3, G7 y G8.",
-    version="1.3.0",
+    title="Grupo 4 - Cart, Checkout and Inventory API QA",
+    description="API real construida en FastAPI para el Entregable 1. Integración con G1, G2 y G3.",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -123,12 +106,14 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     Retorna el user_id (UUID) si es un cliente válido, o Nil UUID si es un invitado.
     FUSIONADO: Incluye soporte para invitados y control de roles de admin/seller.
     """
+    # 1. ESCENARIO INVITADO
     if not credentials:
         logger.info("Sesión: INVITADO (Se guardará como NULL en la BD)")
         return "00000000-0000-0000-0000-000000000000"
     
     token = credentials.credentials
     
+    # 2. ESCENARIO LOGUEADO
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -140,6 +125,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                 datos_usuario = response.json()
                 user_info = datos_usuario.get("user", datos_usuario)
                 
+                # 3. CONTROL DE ROLES
                 roles_usuario = user_info.get("roles", [])
                 if "admin" in roles_usuario or "seller" in roles_usuario:
                     raise HTTPException(
@@ -147,6 +133,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                         detail={"error_code": "FORBIDDEN", "message": "ADMIN_Y_SELLER_NO_PUEDEN_TENER_CARRITO"}
                     )
                 
+                # Extraemos el ID real del usuario
                 user_id = user_info.get("id")
                 logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {user_id}")
                 return user_id
@@ -168,12 +155,18 @@ async def create_cart(
         logger.info(f"[{x_correlation_id}] Solicitud para crear nuevo carrito (Usuario: {user_id})")
         nuevo_cart_id = await logica_negocio.crear_carrito_bd(user_id=user_id)
         logger.info(f"[{x_correlation_id}] Carrito {nuevo_cart_id} creado exitosamente")
+        
         return {"cart_id": nuevo_cart_id, "user_id": user_id, "status": "ACTIVE", "items": [], "total_amount": 0}
+        
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al crear carrito: {str(e)}")
         raise HTTPException(
             status_code=500, 
-            detail={"error_code": "INTERNAL_SERVER_ERROR", "message": "Error al procesar la creación del carrito.", "correlation_id": x_correlation_id}
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al procesar la creación del carrito.",
+                "correlation_id": x_correlation_id
+            }
         )
 
 @app.get("/v1/cart/{cart_id}", response_model=CartResponse, tags=["Cart"])
@@ -185,20 +178,36 @@ async def get_cart(
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
         
-        # MAGIA AQUÍ: Asignación automática tras Login
+        # MAGIA AQUÍ: Si el usuario es real (no es invitado), nos adueñamos del carrito
         if user_id and user_id != "00000000-0000-0000-0000-000000000000":
             await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
 
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         
         if resultado is None:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "El carrito solicitado no existe."})
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CART_NOT_FOUND", 
+                    "message": "El carrito solicitado no existe.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
         return resultado
         
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": "Error al consultar el carrito."})
+        logger.error(f"[{x_correlation_id}] Error interno al consultar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al consultar el carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 @app.post("/v1/cart/{cart_id}/items", response_model=CartResponse, tags=["Cart"])
 async def add_item_to_cart(
@@ -208,13 +217,25 @@ async def add_item_to_cart(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando agregar producto {request.product_id} al carrito {cart_id}")
+
+        # --- LA MAGIA ESTÁ AQUÍ ---
+        # Si el usuario es real (inició sesión), le asignamos el carrito inmediatamente
         if user_id and user_id != "00000000-0000-0000-0000-000000000000":
             await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
+        # ---------------------------
 
         carro_existente = await logica_negocio.obtener_carrito_completo(cart_id)
         if not carro_existente:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado."})
-            
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al agregar ítem.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CART_NOT_FOUND", 
+                    "message": "Carrito no encontrado.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
@@ -222,16 +243,43 @@ async def add_item_to_cart(
                     headers={"X-Consumer": "cart-service", "X-Correlation-Id": x_correlation_id or ""}
                 )
             except httpx.RequestError:
-                raise HTTPException(status_code=503, detail={"error_code": "CATALOG_SERVICE_UNAVAILABLE", "message": "Servicio de catálogo no disponible."})
-                
+                logger.error(f"[{x_correlation_id}] Falla al comunicarse con Catálogo para el producto {request.product_id}")
+                raise HTTPException(
+                    status_code=503, 
+                    detail={
+                        "error_code": "CATALOG_SERVICE_UNAVAILABLE", 
+                        "message": "El servicio de catálogo no está disponible.", 
+                        "correlation_id": x_correlation_id
+                    }
+                )
         if response.status_code == 404:
-            raise HTTPException(status_code=404, detail={"error_code": "PRODUCT_NOT_FOUND", "message": "Producto no existe en catálogo."})
+            logger.warning(f"[{x_correlation_id}] Producto {request.product_id} no existe en catálogo.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "PRODUCT_NOT_FOUND", 
+                    "message": "El producto no existe en el catálogo.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
         
         producto_json = response.json()
-        producto_data = producto_json.get("data", producto_json) if isinstance(producto_json, dict) else producto_json
+
+        if "data" in producto_json and isinstance(producto_json["data"], dict):
+            producto_data = producto_json["data"]
+        else:
+            producto_data = producto_json
 
         if producto_data.get("status") != "ACTIVE":
-            raise HTTPException(status_code=400, detail={"error_code": "INACTIVE_PRODUCT", "message": "Producto inactivo."})
+            logger.warning(f"[{x_correlation_id}] Producto {request.product_id} inactivo.")
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "error_code": "INACTIVE_PRODUCT", 
+                    "message": "No se puede agregar un producto inactivo al carrito.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
 
         precio_unidad = int(producto_data.get("price", 0)) 
         nombre_producto = producto_data.get("name", "Producto Genérico")
@@ -242,13 +290,21 @@ async def add_item_to_cart(
         )
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
+        logger.info(f"[{x_correlation_id}] Producto {request.product_id} agregado exitosamente al carrito {cart_id}")
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise 
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": "Error al procesar la solicitud."})
-
+        logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al procesar la solicitud del carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 @app.put("/v1/cart/{cart_id}/items/{item_id}", response_model=CartResponse, tags=["Cart"])
 async def update_item_quantity(
     cart_id: str, 
@@ -257,19 +313,42 @@ async def update_item_quantity(
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
+    """Modifica la cantidad de un producto específico en el carrito."""
     try:
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} actualizando cantidad a {request.quantity} para el ítem {item_id} en el carrito {cart_id}")
+        
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
         await logica_negocio.actualizar_item_bd(cart_id, item_id, request.quantity)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
+        
         if not resultado:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado."})
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar actualizar.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CART_NOT_FOUND", 
+                    "message": "Carrito no encontrado.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
             
+        logger.info(f"[{x_correlation_id}] Ítem {item_id} actualizado exitosamente")
         return resultado
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al actualizar cantidad del ítem {item_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al actualizar la cantidad del producto en el carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 @app.delete("/v1/cart/{cart_id}/items/{item_id}", response_model=CartResponse, tags=["Cart"])
 async def remove_item_from_cart(
@@ -278,19 +357,41 @@ async def remove_item_from_cart(
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
 ):
+    """Elimina un producto específico del carrito.""" 
     try: 
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando eliminar: {item_id} del carrito: {cart_id}")
+        
+        # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
         await logica_negocio.eliminar_item_bd(cart_id, item_id)
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         if not resultado:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado."})
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado tras eliminar ítem.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CART_NOT_FOUND", 
+                    "message": "Carrito no encontrado.", 
+                    "correlation_id": x_correlation_id
+                }
+            )
         
+        logger.info(f"[{x_correlation_id}] Ítem {item_id} eliminado exitosamente")
         return resultado
+        
     except HTTPException:
         raise 
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al eliminar ítem {item_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al eliminar el producto del carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 @app.patch("/v1/cart/{cart_id}/activate", tags=["Cart"])
 async def reactivate_cart(
@@ -301,73 +402,200 @@ async def reactivate_cart(
     """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
     try:
         logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
-        await logica_negocio.reactivar_carrito_bd(cart_id)
-        return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        conn = await logica_negocio.get_db_connection()
+        try:
+            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
+            
+            if estado_actual == 'COMPLETED':
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error_code": "CART_ALREADY_COMPLETED",
+                        "message": "El carrito ya fue pagado.",
+                        "correlation_id": x_correlation_id
+                    }
+                )
+                
+            if estado_actual == 'PENDING':
+                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
+                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+                
+            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        finally:
+            await conn.close()
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error al reactivar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al reactivar el carrito.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 # ==========================================
 # 4. ENDPOINTS DE CHECKOUT 
 # ==========================================
+@app.post("/v1/checkout", tags=["Checkout"])
+async def initiate_checkout(
+    request: CheckoutRequest,
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id"),
+    token: HTTPAuthorizationCredentials = Depends(security) # <-- Necesitamos el token para pasarlo a G8
+):
+    try:
+        logger.info(f"[{x_correlation_id}] Iniciando checkout para carrito {request.cart_id}")
+        
+        # 1. consulta a la BD para obtener el total del carrito
+        carrito = await logica_negocio.obtener_carrito_completo(request.cart_id)
+        monto_total = carrito["total_amount"]
+        # monto_total = 59990 # Valor de prueba mientras conectas la BD
+        
+        # 2. Aquí deberías llamar al Grupo 5 para crear la orden y obtener el ID
+        order_id_simulado = "ORD-20260611-001" 
+        
+        # ==========================================
+        # 3. INTEGRACIÓN CON GRUPO 8 (PAGOS)
+        # ==========================================
+        # Preparamos los headers exigidos por el contrato de G8
+        headers_g8 = {
+            "Authorization": f"Bearer {token.credentials}" if token else "",
+            "Idempotency-Key": idempotency_key,
+            "X-Correlation-Id": x_correlation_id or str(uuid.uuid4()),
+            "Content-Type": "application/json"
+        }
+        
+        # Preparamos el Body (Payload) según su contrato
+        payload_g8 = {
+            "orderId": order_id_simulado,
+            "userId": user_id,
+            "amount": monto_total,
+            "currency": "CLP",
+            "method": "MERCADOPAGO"
+        }
+        
+        url_g8 = "https://g8-pagos.onrender.com/api/v1/payments" # URL inferida del contrato de G5. Confírmala con G8.
+        
+        logger.info(f"[{x_correlation_id}] Solicitando pago a Mercado Pago (G8) para orden {order_id_simulado}")
+        
+        # Hacemos la petición POST asíncrona al Grupo 8
+        async with httpx.AsyncClient() as client:
+            respuesta_g8 = await client.post(url_g8, json=payload_g8, headers=headers_g8)
+            
+            # Validamos si G8 creó el pago correctamente (Retorna 200 o 201)
+            if respuesta_g8.status_code in (200, 201):
+                datos_pago = respuesta_g8.json()
+                
+                # Armamos el evento CheckoutStarted (que ya tenías)
+                # ... tu código del evento Pub/Sub va aquí ...
+                
+                # Le respondemos al Frontend con la URL de MercadoPago
+                return {
+                    "status": "success", 
+                    "message": "Checkout iniciado",
+                    "paymentId": datos_pago.get("paymentId"),
+                    "checkoutUrl": datos_pago.get("checkoutUrl", "URL_NO_PROVISTA")
+                }
+            else:
+                logger.error(f"Error de G8: {respuesta_g8.text}")
+                raise HTTPException(
+                    status_code=502, 
+                    detail="Error al procesar el pago con el servicio externo (Grupo 8)."
+                )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/v1/checkout/{checkout_id}", tags=["Checkout"])
 async def get_checkout_status(
     checkout_id: str,
     token: HTTPAuthorizationCredentials = Depends(security),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
+    """Consulta el estado de un checkout directamente en la BD."""
     try:
+        logger.info(f"[{x_correlation_id}] Consultando estado del checkout {checkout_id}")
+        
         checkout = await logica_negocio.obtener_checkout_bd(checkout_id)
+        
         if not checkout:
-            raise HTTPException(status_code=404, detail={"error_code": "CHECKOUT_NOT_FOUND", "message": "Checkout no existe."})
+            logger.warning(f"[{x_correlation_id}] Checkout {checkout_id} no encontrado.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CHECKOUT_NOT_FOUND",
+                    "message": "El checkout solicitado no existe.",
+                    "correlation_id": x_correlation_id
+                }
+            )
+            
+        logger.info(f"[{x_correlation_id}] Checkout {checkout_id} consultado exitosamente")
         return checkout
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al consultar checkout {checkout_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al consultar el estado del checkout.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
-@app.post("/v1/cart/{cart_id}/checkout", tags=["Checkout"])
+
+@app.post("/v1/cart/{cart_id}/checkout", tags=["Cart"])
 async def checkout_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
-    """Paso 1: Marca el carrito como PENDING, indicando intención de pedido."""
+    """Marca el carrito como PENDING, indicando intención de pedido."""
     try:
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} registrando intención de pedido para carrito {cart_id}")
+        
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
         if not cart:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado."})
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar hacer checkout.")
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "CART_NOT_FOUND",
+                    "message": "Carrito no encontrado.",
+                    "correlation_id": x_correlation_id
+                }
+            )
             
         await logica_negocio.cerrar_pedido(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Intención de pedido (PENDING) registrada para carrito {cart_id}")
         return {"message": "Intención de pedido registrada correctamente", "status": "PENDING"}
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
-
-@app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
-async def complete_checkout(
-    cart_id: str,
-    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
-):
-    """Paso 2: Marca el carrito como COMPLETED definitivo tras confirmar el pago."""
-    try:
-        cart = await logica_negocio.obtener_carrito_completo(cart_id)
-        if not cart:
-            raise HTTPException(status_code=404, detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado"})
-            
-        await logica_negocio.completar_pedido_bd(cart_id)
-        return {"message": "Pago confirmado, carrito cerrado exitosamente", "status": "COMPLETED"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al procesar checkout del carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al registrar la intención de pedido.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
 ### ==========================================
+
 @app.get("/v1/inventory/{product_id}", tags=["Inventory"])
 async def check_inventory(
     product_id: str,
@@ -375,14 +603,31 @@ async def check_inventory(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
+        logger.info(f"[{x_correlation_id}] Consultando inventario para producto {product_id}")
         resultado = await logica_negocio.consultar_inventario_bd(product_id)
         if not resultado:
-            raise HTTPException(status_code=404, detail={"error_code": "PRODUCT_NOT_FOUND", "message": "Producto no encontrado."})
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "PRODUCT_NOT_FOUND",
+                    "message": "Producto no encontrado en inventario.",
+                    "correlation_id": x_correlation_id
+                }   
+            )
+        logger.info(f"[{x_correlation_id}] Inventario para producto {product_id} consultado exitosamente")
         return resultado
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error al consultar inventario para producto {product_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al consultar el inventario.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 @app.post("/v1/stock/reservations", tags=["Inventory"])
 async def reserve_stock(
@@ -391,12 +636,24 @@ async def reserve_stock(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        return await logica_negocio.crear_reserva_bd(request.product_id, request.cart_id, request.user_id, request.quantity)
+        logger.info(f"[{x_correlation_id}] Usuario {request.user_id} intentando reservar stock para producto {request.product_id} en carrito {request.cart_id}")
+        
+        # Llama a tu función real para insertar la reserva en Supabase
+        resultado = await logica_negocio.crear_reserva_bd(
+            request.product_id, request.cart_id, request.user_id, request.quantity
+        )
+        
+        logger.info(f"[{x_correlation_id}] Reserva de stock para producto {request.product_id} creada exitosamente")
+        return resultado
+    
     except HTTPException:
         raise
     except Exception as e:
         mensaje_error = str(e)
+        
         if "INSUFFICIENT_STOCK" in mensaje_error:
+            logger.warning(f"[{x_correlation_id}] Falló la reserva: Stock insuficiente para el producto {request.product_id}")
+            
             fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             evento_shortage = {
                 "eventId": str(uuid.uuid4()),
@@ -413,12 +670,35 @@ async def reserve_stock(
                 }
             }
             await G4pubsub.publicar_evento(evento_shortage)
-            raise HTTPException(status_code=409, detail={"error_code": "INSUFFICIENT_STOCK", "message": "No hay stock suficiente."})
+            
+            raise HTTPException(
+                status_code=409, 
+                detail={
+                    "error_code": "INSUFFICIENT_STOCK",
+                    "message": "No hay stock suficiente para crear la reserva.",
+                    "correlation_id": x_correlation_id
+                }
+            )
             
         elif "PRODUCT_NOT_FOUND" in mensaje_error:
-            raise HTTPException(status_code=404, detail={"error_code": "PRODUCT_NOT_FOUND", "message": "Producto no existe."})
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "error_code": "PRODUCT_NOT_FOUND",
+                    "message": "El producto solicitado no existe.",
+                    "correlation_id": x_correlation_id
+                }
+            )
             
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al crear reserva: {mensaje_error}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al crear la reserva de stock.",
+                "correlation_id": x_correlation_id
+            }
+        )
 
 @app.delete("/v1/stock/reservations/{reservation_id}", tags=["Inventory"])
 async def release_stock(
@@ -427,27 +707,52 @@ async def release_stock(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
+        logger.info(f"[{x_correlation_id}] Intentando liberar stock para reserva {reservation_id}")
         resultado = await logica_negocio.liberar_reserva_bd(reservation_id)
+        
         if resultado is False:
-            raise HTTPException(status_code=404, detail={"error_code": "RESERVATION_NOT_FOUND", "message": "Reserva no existe."})
-        return {"status": "RELEASED", "reservation_id": reservation_id, "message": "Stock liberado."}
+            logger.warning(f"[{x_correlation_id}] Reserva {reservation_id} no encontrada al intentar liberar.")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error_code": "RESERVATION_NOT_FOUND",
+                    "message": "La reserva especificada no existe o ya fue liberada.",
+                    "correlation_id": x_correlation_id
+                }
+            )
+
+        logger.info(f"[{x_correlation_id}] Stock liberado correctamente para la reserva {reservation_id}")
+        return {"status": "RELEASED", "reservation_id": reservation_id, "message": "Stock liberado correctamente"}
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_SERVER_ERROR", "message": str(e)})
+        logger.error(f"[{x_correlation_id}] Error interno al liberar reserva {reservation_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error al procesar la liberación de la reserva.",
+                "correlation_id": x_correlation_id
+            }
+        )
     
 ### ==========================================
 ### 6. CONSUMIDOR DE EVENTOS (PUB/SUB)
 ### ==========================================
 async def procesar_evento_pago_g8(evento_recibido: dict):
     """
-    Consumidor llamado automáticamente cuando el Bus nos entregue un mensaje de G8.
+    Esta función actuará como consumidor. Será llamada automáticamente 
+    cuando el Bus de Eventos nos entregue un mensaje del Grupo 8.
     """
     tipo_evento = evento_recibido.get("eventType")
     correlation_id = evento_recibido.get("correlationId", str(uuid.uuid4()))
     fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     
     if tipo_evento == "PAYMENT_APPROVED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.confirmar_checkout(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutConfirmed ---
         evento_confirmed = {
             "eventId": str(uuid.uuid4()),
             "eventType": "CheckoutConfirmed",
@@ -458,12 +763,16 @@ async def procesar_evento_pago_g8(evento_recibido: dict):
             "payload": {
                 "orderId": evento_recibido.get("payload", {}).get("orderId"),
                 "status": "CONFIRMED",
-                "message": "El pago fue aprobado."
+                "message": "El pago fue aprobado y el checkout se ha cerrado exitosamente."
             }
         }
         await G4pubsub.publicar_evento(evento_confirmed)
         
     elif tipo_evento == "PAYMENT_REJECTED":
+        # 1. Aquí irá la lógica BD: await logica_negocio.fallar_checkout(...)
+        # 2. Aquí irá la lógica BD: await logica_negocio.liberar_reserva_bd(...)
+        
+        # --- ARMAMOS NUESTRO EVENTO: CheckoutFailed ---
         evento_failed = {
             "eventId": str(uuid.uuid4()),
             "eventType": "CheckoutFailed",
