@@ -500,9 +500,30 @@ async def checkout_cart(
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
         if not cart or not cart["items"]:
             raise HTTPException(status_code=400, detail="Carrito no encontrado o vacío.")
+# +++ NUEVO BLOQUE: 1.5 RESERVAR STOCK +++
+        url_reserva = "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations"
+        
+        # Armamos el payload con los items que queremos reservar
+        payload_reserva = {
+            "reservation_id": cart_id, # Usamos el ID del carrito para rastrearlo fácil
+            "items": [
+                {"product_id": item["product_id"], "quantity": item["quantity"]} 
+                for item in cart["items"]
+            ]
+        }
+        
+        async with httpx.AsyncClient() as client:
+            respuesta_reserva = await client.post(url_reserva, json=payload_reserva)
+            
+            if respuesta_reserva.status_code == 409 or respuesta_reserva.status_code == 400:
+                # El 409 (Conflict) suele usarse cuando no hay stock suficiente
+                raise HTTPException(status_code=409, detail="No hay stock suficiente para uno o más productos del carrito.")
+            elif respuesta_reserva.status_code not in (200, 201):
+                raise HTTPException(status_code=502, detail="Error al comunicarse con el servicio de inventario.")
+        # +++ FIN NUEVO BLOQUE +++
 
-        await logica_negocio.cerrar_pedido(cart_id) 
-
+        # Solo si la reserva fue exitosa, pasamos el carrito a PENDING
+        await logica_negocio.cerrar_pedido(cart_id)
         # --- 2. LLAMAR A G5 (PEDIDOS) ---
         url_g5 = "https://api-grupo5-pedidos.onrender.com/orders"
         
@@ -570,7 +591,7 @@ async def checkout_cart(
         logger.info(f"[{x_correlation_id}] Orquestación completa. Redirigiendo a pago.")
         return {
             "message": "Checkout iniciado correctamente",
-            "status": "PENDING",
+            "status": "PENDING_PAYMENT",
             "orderId": order_id,
             "paymentUrl": datos_pago.get("checkoutUrl") 
         }
