@@ -424,68 +424,6 @@ async def reactivate_cart(
 # ==========================================
 # 4. ENDPOINTS DE CHECKOUT 
 # ==========================================
-@app.post("/v1/checkout", tags=["Checkout"])
-async def initiate_checkout(
-    request: CheckoutRequest,
-    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
-):
-    """Inicia el proceso de checkout."""
-    try:
-        logger.info(f"[{x_correlation_id}] Iniciando checkout para carrito {request.cart_id} (Idempotency: {idempotency_key})")
-        
-        cart = await logica_negocio.obtener_carrito_completo(request.cart_id)
-        
-        if not cart:
-            logger.warning(f"[{x_correlation_id}] Carrito {request.cart_id} no encontrado.")
-            raise HTTPException(
-                status_code=404, 
-                detail={
-                    "error_code": "CART_NOT_FOUND",
-                    "message": "Carrito no encontrado.",
-                    "correlation_id": x_correlation_id
-                }
-            )
-            
-        if len(cart["items"]) == 0:
-            logger.warning(f"[{x_correlation_id}] Intento de checkout con carrito vacío ({request.cart_id}).")
-            raise HTTPException(
-                status_code=400, 
-                detail={
-                    "error_code": "EMPTY_CART",
-                    "message": "No se puede iniciar el checkout de un carrito vacío.",
-                    "correlation_id": x_correlation_id
-                }
-            )
-
-        await logica_negocio.cerrar_pedido(request.cart_id)
-        
-        checkout_id = str(uuid.uuid4())
-        
-        respuesta_checkout = {
-            "checkout_id": checkout_id,
-            "status": "PROCESSING", 
-            "cartId": request.cart_id,
-            "currency": "CLP",
-            "amount": cart["total_amount"]
-        }
-        
-        logger.info(f"[{x_correlation_id}] Checkout {checkout_id} iniciado exitosamente para carrito {request.cart_id}")
-        return respuesta_checkout
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al iniciar checkout: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail={
-                "error_code": "INTERNAL_SERVER_ERROR",
-                "message": "Ocurrió un error inesperado al iniciar el checkout.",
-                "correlation_id": x_correlation_id
-            }
-        )
 
 @app.get("/v1/checkout/{checkout_id}", tags=["Checkout"])
 async def get_checkout_status(
