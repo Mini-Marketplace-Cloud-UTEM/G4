@@ -13,6 +13,7 @@ import logica_negocio
 import logging
 import json
 from datetime import datetime, timezone
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail={"error_code": "BAD_GATEWAY", "message": "Error de comunicación con el servicio de autenticación"})
 
+
 # ==========================================
 # 3. ENDPOINTS DE CARRITO (CART)
 # ==========================================
@@ -173,7 +175,7 @@ async def create_cart(
 async def get_cart(
     cart_id: str, 
     user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
 ):
     try:
         logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
@@ -294,7 +296,7 @@ async def add_item_to_cart(
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
-        raise
+        raise 
     except Exception as e:
         logger.error(f"[{x_correlation_id}] Error interno al agregar ítem: {str(e)}")
         raise HTTPException(
@@ -305,6 +307,7 @@ async def add_item_to_cart(
                 "correlation_id": x_correlation_id
             }
         )
+
 @app.put("/v1/cart/{cart_id}/items/{item_id}", response_model=CartResponse, tags=["Cart"])
 async def update_item_quantity(
     cart_id: str, 
@@ -402,27 +405,13 @@ async def reactivate_cart(
     """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
     try:
         logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
-        conn = await logica_negocio.get_db_connection()
-        try:
-            estado_actual = await conn.fetchval("SELECT status FROM carts WHERE cart_id = $1", cart_id)
-            
-            if estado_actual == 'COMPLETED':
-                raise HTTPException(
-                    status_code=400, 
-                    detail={
-                        "error_code": "CART_ALREADY_COMPLETED",
-                        "message": "El carrito ya fue pagado.",
-                        "correlation_id": x_correlation_id
-                    }
-                )
-                
-            if estado_actual == 'PENDING':
-                await conn.execute("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", cart_id)
-                logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
-                
-            return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
-        finally:
-            await conn.close()
+        
+        # Usamos la función blindada con ::uuid
+        await logica_negocio.reactivar_carrito_bd(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
+        return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -439,78 +428,6 @@ async def reactivate_cart(
 # ==========================================
 # 4. ENDPOINTS DE CHECKOUT 
 # ==========================================
-@app.post("/v1/checkout", tags=["Checkout"])
-async def initiate_checkout(
-    request: CheckoutRequest,
-    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id"),
-    token: HTTPAuthorizationCredentials = Depends(security) # <-- Necesitamos el token para pasarlo a G8
-):
-    try:
-        logger.info(f"[{x_correlation_id}] Iniciando checkout para carrito {request.cart_id}")
-        
-        # 1. consulta a la BD para obtener el total del carrito
-        carrito = await logica_negocio.obtener_carrito_completo(request.cart_id)
-        monto_total = carrito["total_amount"]
-        # monto_total = 59990 # Valor de prueba mientras conectas la BD
-        
-        # 2. Aquí deberías llamar al Grupo 5 para crear la orden y obtener el ID
-        order_id_simulado = "ORD-20260611-001" 
-        
-        # ==========================================
-        # 3. INTEGRACIÓN CON GRUPO 8 (PAGOS)
-        # ==========================================
-        # Preparamos los headers exigidos por el contrato de G8
-        headers_g8 = {
-            "Authorization": f"Bearer {token.credentials}" if token else "",
-            "Idempotency-Key": idempotency_key,
-            "X-Correlation-Id": x_correlation_id or str(uuid.uuid4()),
-            "Content-Type": "application/json"
-        }
-        
-        # Preparamos el Body (Payload) según su contrato
-        payload_g8 = {
-            "orderId": order_id_simulado,
-            "userId": user_id,
-            "amount": monto_total,
-            "currency": "CLP",
-            "method": "MERCADOPAGO"
-        }
-        
-        url_g8 = "https://g8-pagos.onrender.com/api/v1/payments" # URL inferida del contrato de G5. Confírmala con G8.
-        
-        logger.info(f"[{x_correlation_id}] Solicitando pago a Mercado Pago (G8) para orden {order_id_simulado}")
-        
-        # Hacemos la petición POST asíncrona al Grupo 8
-        async with httpx.AsyncClient() as client:
-            respuesta_g8 = await client.post(url_g8, json=payload_g8, headers=headers_g8)
-            
-            # Validamos si G8 creó el pago correctamente (Retorna 200 o 201)
-            if respuesta_g8.status_code in (200, 201):
-                datos_pago = respuesta_g8.json()
-                
-                # Armamos el evento CheckoutStarted (que ya tenías)
-                # ... tu código del evento Pub/Sub va aquí ...
-                
-                # Le respondemos al Frontend con la URL de MercadoPago
-                return {
-                    "status": "success", 
-                    "message": "Checkout iniciado",
-                    "paymentId": datos_pago.get("paymentId"),
-                    "checkoutUrl": datos_pago.get("checkoutUrl", "URL_NO_PROVISTA")
-                }
-            else:
-                logger.error(f"Error de G8: {respuesta_g8.text}")
-                raise HTTPException(
-                    status_code=502, 
-                    detail="Error al procesar el pago con el servicio externo (Grupo 8)."
-                )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/checkout/{checkout_id}", tags=["Checkout"])
 async def get_checkout_status(
@@ -591,7 +508,42 @@ async def checkout_cart(
                 "correlation_id": x_correlation_id
             }
         )
-
+#Esto le falta al QA. Debo agregarlo
+@app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
+async def complete_checkout(
+    cart_id: str,
+    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
+):
+    """Marca el carrito como COMPLETED definitivo tras confirmar el pago."""
+    try:
+        logger.info(f"[{x_correlation_id}] Confirmando pago y cerrando carrito {cart_id} a COMPLETED")
+        
+        # 1. Verificamos que el carrito exista
+        cart = await logica_negocio.obtener_carrito_completo(cart_id)
+        if not cart:
+            raise HTTPException(
+                status_code=404, 
+                detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado"}
+            )
+            
+        # 2. Pasamos el estado a COMPLETED en la BD
+        await logica_negocio.completar_pedido_bd(cart_id)
+        
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} completado con éxito")
+        return {"message": "Pago confirmado, carrito cerrado exitosamente", "status": "COMPLETED"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[{x_correlation_id}] Error al completar carrito {cart_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error_code": "INTERNAL_SERVER_ERROR",
+                "message": "Error interno al cerrar el pedido."
+            }
+        )
 ### ==========================================
 ### 5. ENDPOINTS DE INVENTARIO (RESERVAS)
 ### ==========================================
@@ -669,7 +621,7 @@ async def reserve_stock(
                     "occurredAt": fecha_actual
                 }
             }
-            await G4pubsub.publicar_evento(evento_shortage)
+            print("Publicando evento para G7:", json.dumps(evento_shortage, indent=2))
             
             raise HTTPException(
                 status_code=409, 
@@ -736,7 +688,7 @@ async def release_stock(
                 "correlation_id": x_correlation_id
             }
         )
-    
+
 ### ==========================================
 ### 6. CONSUMIDOR DE EVENTOS (PUB/SUB)
 ### ==========================================
@@ -788,3 +740,15 @@ async def procesar_evento_pago_g8(evento_recibido: dict):
             }
         }
         await G4pubsub.publicar_evento(evento_failed)
+
+async def tarea_ttl_carritos():
+    """Ciclo infinito que corre en segundo plano cada 5 minutos."""
+    while True:
+        await asyncio.sleep(300)  # Espera 5 minutos (300 segundos)
+        print("INFO: Ejecutando limpieza de carritos PENDING...")
+        await logica_negocio.limpiar_carritos_huerfanos_bd()
+
+@app.on_event("startup")
+async def iniciar_tareas_segundo_plano():
+    """Se ejecuta automáticamente cuando arrancas el servidor en Render."""
+    asyncio.create_task(tarea_ttl_carritos())
