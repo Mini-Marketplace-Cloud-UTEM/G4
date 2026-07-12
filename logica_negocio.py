@@ -29,11 +29,15 @@ async def get_db_connection():
 async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
     """
     Crea un nuevo carrito en la base de datos.
-    Si el Grupo 2 nos entrega un user_id, lo asocia inmediatamente.
+    Si no se envía un user_id (como en el caso de los tests o invitados), 
+    se asigna el UUID de ceros por defecto para evitar errores de restricción NOT NULL.
     """
     conn = await get_db_connection()
     try:
-        # Insertamos el carrito con el user_id (puede ser NULL si es anónimo) y estado ACTIVE
+        # Si llega un None, lo transformamos en el ID de invitado
+        if not user_id:
+            user_id = '00000000-0000-0000-0000-000000000000'
+
         query = """
             INSERT INTO carts (user_id, status, total_amount, currency)
             VALUES ($1, 'ACTIVE', 0, 'CLP')
@@ -147,6 +151,37 @@ async def cerrar_pedido(cart_id: str):
     finally:
         await conn.close()
 
+async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
+    """Asigna un carrito de invitado a un usuario real de forma segura."""
+    conn = await get_db_connection()
+    try:
+        # Actualizamos SOLO si el carrito no tiene dueño o tiene el ID de ceros
+        query = """
+            UPDATE carts 
+            SET user_id = $1 
+            WHERE cart_id = $2 
+            AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000')
+        """
+        resultado = await conn.execute(query, user_id, cart_id)
+        print(f"DEBUG Asignación: {resultado} para el carrito {cart_id}")
+    finally:
+        await conn.close()
+        
+async def reactivar_carrito_bd(cart_id: str):
+    """Fuerza el estado del carrito de vuelta a ACTIVE si el usuario cancela."""
+    conn = await get_db_connection()
+    try:
+        # Solo actualizamos si actualmente está PENDING.
+        # Si está ACTIVE no hace nada, si está COMPLETED lo ignora.
+        query = """
+            UPDATE carts 
+            SET status = 'ACTIVE' 
+            WHERE cart_id = $1 AND status = 'PENDING'
+        """
+        resultado = await conn.execute(query, cart_id)
+        print(f"DEBUG Reactivación: {resultado} para el carrito {cart_id}")
+    finally:
+        await conn.close()
 async def actualizar_item_bd(cart_id: str, item_id: str, quantity: int):
     """Actualiza la cantidad de un ítem existente validando que pertenezca al carrito y esté ACTIVO."""
     conn = await get_db_connection()
@@ -279,5 +314,14 @@ async def liberar_reserva_bd(reservation_id: str):
         WHERE reservation_id = $1::uuid AND status = 'ACTIVE';
         """
         await conn.execute(query, reservation_id)
+    finally:
+        await conn.close()
+async def completar_pedido_bd(cart_id: str):
+    """Cambia el estado del carrito a COMPLETED tras un pago exitoso."""
+    conn = await get_db_connection()
+    try:
+        query = "UPDATE carts SET status = 'COMPLETED' WHERE cart_id = $1"
+        resultado = await conn.execute(query, cart_id)
+        print(f"DEBUG Pago Exitoso: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
