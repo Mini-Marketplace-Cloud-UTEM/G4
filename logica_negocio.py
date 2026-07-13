@@ -142,12 +142,24 @@ async def recalcular_total_carrito_bd(cart_id: str):
 
 async def cerrar_pedido(cart_id: str):
     """
-    Cambia el estado del carrito de ACTIVE a PENDING (Checkout).
+    Cambia el estado del carrito de ACTIVE a PENDING de forma segura (Anti Doble-Clic).
     """
     conn = await get_db_connection()
     try:
-        query = "UPDATE carts SET status = 'PENDING' WHERE cart_id = $1"
-        await conn.execute(query, cart_id)
+        # Agregamos la condición AND status = 'ACTIVE'
+        query = "UPDATE carts SET status = 'PENDING' WHERE cart_id = $1 AND status = 'ACTIVE'"
+        
+        # asyncpg devuelve un string con el resultado, ej: "UPDATE 1" o "UPDATE 0"
+        resultado = await conn.execute(query, cart_id)
+        
+        # Si devuelve UPDATE 0, significa que la fila ya no estaba ACTIVE 
+        # (otro clic nos ganó o el carrito ya estaba pagado)
+        if resultado == "UPDATE 0":
+            raise HTTPException(
+                status_code=409, 
+                detail="El carrito ya está procesando un pago o no se encuentra activo. Por favor, espera."
+            )
+            
     finally:
         await conn.close()
 
