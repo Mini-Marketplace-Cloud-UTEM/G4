@@ -525,7 +525,7 @@ async def checkout_cart(
         # Solo si la reserva fue exitosa, pasamos el carrito a PENDING
         await logica_negocio.cerrar_pedido(cart_id)
         # --- 2. LLAMAR A G5 (PEDIDOS) ---
-        url_g5 = "https://api-grupo5-pedidos.onrender.com/orders"
+        url_g5 = "https://grupo5-pedidos-e5fn.onrender.com/orders"
         
         headers_g5 = {
             "Idempotency-Key": str(uuid.uuid4()), # G5 lo exige
