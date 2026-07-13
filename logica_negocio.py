@@ -28,22 +28,30 @@ async def get_db_connection():
 
 async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
     """
-    Crea un nuevo carrito en la base de datos.
-    Si no se envía un user_id (como en el caso de los tests o invitados), 
-    se asigna el UUID de ceros por defecto para evitar errores de restricción NOT NULL.
+    Crea un nuevo carrito en la base de datos, o devuelve el existente si ya hay uno ACTIVO.
     """
     conn = await get_db_connection()
     try:
-        # Si llega un None, lo transformamos en el ID de invitado
         if not user_id:
             user_id = '00000000-0000-0000-0000-000000000000'
 
+        # 1. EL CANDADO PARA CARRITOS DUPLICADOS
+        # Solo verificamos duplicados para usuarios reales, no para el ID genérico de invitados.
+        # (Si verificamos al ID de ceros, ¡todos los invitados de la tienda compartirían el mismo carrito!)
+        if user_id != '00000000-0000-0000-0000-000000000000':
+            check_query = "SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1"
+            existing_cart = await conn.fetchval(check_query, user_id)
+            
+            if existing_cart:
+                print(f"DEBUG: El usuario {user_id} ya tenía el carrito {existing_cart} activo. Reutilizando.")
+                return str(existing_cart)
+
+        # 2. Si no tenía carrito (o es un invitado nuevo), hacemos el INSERT
         query = """
             INSERT INTO carts (user_id, status, total_amount, currency)
             VALUES ($1, 'ACTIVE', 0, 'CLP')
             RETURNING cart_id;
         """
-        # asyncpg devuelve el UUID como un objeto, lo convertimos a string
         cart_id = await conn.fetchval(query, user_id)
         return str(cart_id)
     finally:
