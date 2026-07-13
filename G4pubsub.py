@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 # Aquí pones la URL que copiaste de CloudAMQP
 # (Recuerda luego pasarla a las variables de entorno de Render)
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqps://iefxzcjj:pEvLsFdB81-pj8TyrmmFNid2FmCCyPYW@gull.rmq.cloudamqp.com/iefxzcjj")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL")
 EXCHANGE_NAME = "g4_events_exchange"
 
 async def publicar_evento(evento_dict: dict):
