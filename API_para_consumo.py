@@ -574,16 +574,23 @@ async def checkout_cart(
         try:
             # --- 4. RESERVAR STOCK (G4) ---
             url_reserva = "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations"
-            payload_reserva = {
-                "reservation_id": cart_id, 
-                "items": [{"product_id": item["product_id"], "quantity": item["quantity"]} for item in cart["items"]]
-            }
+            
             async with httpx.AsyncClient() as client:
-                respuesta_reserva = await client.post(url_reserva, json=payload_reserva, timeout=15.0)
-                if respuesta_reserva.status_code in (400, 409):
-                    raise HTTPException(status_code=409, detail="No hay stock suficiente para uno o más productos.")
-                elif respuesta_reserva.status_code not in (200, 201):
-                    raise HTTPException(status_code=502, detail="Error al comunicarse con el servicio de inventario.")
+                for item in cart["items"]:
+                    # Armamos el payload EXACTAMENTE como lo pide su Swagger
+                    payload_reserva = {
+                        "productId": item["product_id"],
+                        "cartId": cart_id,
+                        "userId": user_id or "00000000-0000-0000-0000-000000000000",
+                        "quantity": item["quantity"]
+                    }
+                    
+                    respuesta_reserva = await client.post(url_reserva, json=payload_reserva, timeout=15.0)
+                    
+                    if respuesta_reserva.status_code in (400, 409):
+                        raise HTTPException(status_code=409, detail=f"No hay stock suficiente para el producto {item['product_id']}.")
+                    elif respuesta_reserva.status_code not in (200, 201):
+                        raise HTTPException(status_code=502, detail="Error al comunicarse con el servicio de inventario.")
 
             # --- 5. LLAMAR A G5 (PEDIDOS) ---
             url_g5 = "https://grupo5-pedidos-e5fn.onrender.com/orders"
