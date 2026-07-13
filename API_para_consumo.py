@@ -107,6 +107,7 @@ class ShippingAddress(BaseModel):
 class CheckoutPayload(BaseModel):
     shippingAddress: ShippingAddress
     notes: Optional[str] = ""
+    shippingCost: int = 0  # Agregamos esto, por defecto en 0 si no lo mandan
 ### ==========================================
 ### 2. DEPENDENCIA DE AUTENTICACIÓN (GRUPO 2)
 ### ==========================================
