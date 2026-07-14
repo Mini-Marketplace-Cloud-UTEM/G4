@@ -90,7 +90,6 @@ stockDisponible = stockTotal - reservasActivas
                 └────────────────┘ └──────────────┘ └──────────────────┘
 ```
 
-Para el detalle de componentes y decisiones técnicas, consulte [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
 
 ## Tecnologías
 
