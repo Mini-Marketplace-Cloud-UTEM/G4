@@ -1,129 +1,342 @@
-# Grupo 4- Carrito, Checkout, Inventario y Concurrencia
-(Se tienen otros readme en el repositorio para disposición y ver en que punto está el grupo en el momento)
-Integrantes:
+# Grupo 4 — Carrito de Compra, Checkout, Inventario y Concurrencia
 
-Javier Agusto (Lidel suplemo) - Ricardo Castillo - Ignacio Muñoz - Jaime Orellana - Carlos Quinteros
+Microservicio transaccional del **Mini Marketplace Cloud UTEM**, responsable de administrar el carrito de compra, coordinar el checkout, mantener reservas temporales de inventario y controlar accesos concurrentes al stock.
 
-Servicio backend del **Grupo 4** para el ecosistema del Marketplace Distribuido (UTEM). Actúa como el núcleo transaccional del proceso de compra, tomando lo que el cliente quiera comprar, y tomando el inicio de sesión de un usuario, y los datos de envío de la persona
+## Integrantes
 
-# ¿Qúe hace este servicio?
+| Integrante | Rol |
+|---|---|
+| Javier Agusto | Líder de equipo |
+| Ricardo Castillo | Desarrollo e integración |
+| Ignacio Muñoz | Desarrollo e integración |
+| Jaime Orellana | Desarrollo e integración |
+| Carlos Quinteros | Desarrollo e integración |
 
-Nuestro microservicio administra el núcleo transaccional del proceso de compra del usuario. Sus responsabilidades principales incluyen:
+## Estado del entregable
 
--**Gestión de Compra**:Permite al usuario autenticado gestionar su sesión mediante la adición o eliminación de productos, mientras el servicio se encarga de calcular 100% en el backend los subtotales y totales reales.
+**Versión final integrada del Grupo 4.**
 
--**Inventario Temporal y Concurrencia**: Actualiza de forma temporal el stock del producto mediante un **bloqueo pesimista** en la base de datos. Esto deja el stock reservado de forma segura y evita la sobreventa (concurrencia) cuando múltiples usuarios intentan comprar el mismo ítem al mismo tiempo. Si la transacción no se concreta, el servicio devuelve la reserva al conteo general.
+El servicio contiene la implementación consolidada de:
 
--**Seguridad y Propiedad**:Garantiza mediante validaciones estrictas que la compra y el carrito pertenezcan única y exclusivamente al usuario que la está realizando.
+- Gestión de carritos para usuarios autenticados e invitados.
+- Incorporación, modificación y eliminación de productos.
+- Cálculo de subtotales y total general en el backend.
+- Validación de identidad y restricciones de rol mediante el Grupo 2.
+- Consulta de productos, precios y disponibilidad mediante el Grupo 3.
+- Checkout orquestado con reserva de stock y cotización de despacho.
+- Integración con despacho del Grupo 6.
+- Publicación y consumo de eventos de integración.
+- Reservas de inventario protegidas frente a concurrencia.
+- Liberación y expiración de reservas.
+- Prevención de procesamiento duplicado mediante estados transaccionales.
 
--**Idempotencia**:Exige el uso obligatorio de una llave única (`Idempotency-Key`) en el checkout. Con esto, el servicio se asegura de no tener duplicidad de transacciones, protegiendo al sistema ante recargas de página, reintentos de red o "dobles clics" accidentales del cliente.
+## Responsabilidad del microservicio
 
------------------------------------------------------------------------------------------------------------------------------------
-## Contrato de la API (REST y Eventos)
+El Grupo 4 constituye el núcleo transaccional entre la selección de productos y la confirmación de una compra. Su responsabilidad termina cuando el carrito ha sido procesado y la información necesaria ha sido enviada a los servicios externos correspondientes.
 
-Nuestra API se divide en 10 endpoints REST síncronos y un catálogo de eventos asíncronos (Pub/Sub). 
+### Carrito de compra
 
-**Headers Obligatorios:**
-- Authorization: Bearer <token>`: Obligatorio en todos los endpoints para asegurar que el usuario solo modifique su propio carrito 
-- Idempotency-Key: <uuid>`: Obligatorio en el módulo de Checkout para evitar doble cobro.
+- Crea carritos asociados a usuarios o sesiones invitadas.
+- Obtiene el contenido y estado de un carrito.
+- Agrega productos utilizando el precio vigente del catálogo.
+- Actualiza cantidades únicamente mientras el carrito esté `ACTIVE`.
+- Elimina productos y recalcula el total.
+- Permite asociar un carrito invitado a un usuario autenticado.
 
-### 1. Endpoints REST
+### Checkout
 
-#### Módulo 1: Gestión de Carrito (Cart) 
-| Método | Endpoint | Descripción |
-| :--- | :---: | :--- |
-| **POST** | `/v1/cart` | Crea un nuevo carrito vacío para el usuario autenticado. |
-| **GET** | `/v1/cart/{cartId}` | Retorna el carrito con sus ítems y el monto total calculado. |
-| **POST** | `/v1/cart/{cartId}/items` | Agrega un nuevo producto (`productId`, `quantity`) al carrito. |
-| **PUT** | `/v1/cart/{cartId}/items/{itemId}` | Actualiza la cantidad de un ítem existente. |
-| **DELETE**| `/v1/cart/{cartId}/items/{itemId}` | Elimina un ítem específico del carrito. |
+- Bloquea el carrito al pasar de `ACTIVE` a `PENDING`.
+- Impide que dos solicitudes procesen simultáneamente el mismo carrito.
+- Reserva el inventario requerido.
+- Obtiene datos físicos del producto desde catálogo.
+- Solicita una cotización de despacho al Grupo 6.
+- Calcula el total final del proceso.
+- Permite cancelar el checkout y reactivar el carrito.
+- Completa o revierte el flujo según el resultado del pago recibido por eventos.
 
-#### Módulo 2: Checkout 
-| Método | Endpoint | Descripción |
-| :--- | :---: | :--- |
-| **POST** | `/v1/checkout` | Inicia el proceso de compra basado en un `cartId`. Requiere `Idempotency-Key`. |
-| **GET** | `/v1/checkout/{checkoutId}` | Consulta el estado actual de una intención de compra. |
+### Inventario y concurrencia
 
-#### Módulo 3: Inventario Temporal (Concurrencia)
-| Método | Endpoint | Descripción |
-| :--- | :---: | :--- |
-| **GET** | `/v1/inventory/{productId}` | Consulta el stock real disponible (Stock Total G7 - Reservas Activas G4). |
-| **POST** | `/v1/stock/reservations` | Crea un bloqueo/reserva temporal (15 minutos) de unidades. |
-| **DELETE**| `/v1/stock/reservations/{reservationId}` | Libera manualmente una reserva antes de su expiración. |
+- Sincroniza el inventario inicial desde el catálogo del Grupo 3.
+- Calcula el stock disponible como:
 
------------------------------------------------------------------------------------------------------------------------------------
+```text
+stockDisponible = stockTotal - reservasActivas
+```
 
-### 2. Contrato de Eventos (Pub/Sub)
+- Crea reservas mediante una operación almacenada en PostgreSQL/Supabase.
+- Rechaza la reserva con HTTP `409` cuando el stock es insuficiente.
+- Libera reservas canceladas o rechazadas.
+- Ejecuta limpieza periódica de carritos `PENDING` abandonados.
 
-Para mantener la arquitectura desacoplada, nuestro servicio se comunica asíncronamente con el resto del ecosistema mediante eventos JSON estándar 
+## Arquitectura
 
-#### Eventos que NOSOTROS Publicamos
-| Evento | Cuándo se emite |
-| :--- | :---: |
-| `CheckoutStarted` | Al iniciar exitosamente un checkout. |
-| `StockReserved` | Cuando se logra asegurar el bloqueo de inventario. |
-| `CheckoutConfirmed` | Cuando el proceso termina exitosamente. |
-| `CheckoutFailed` | Si el proceso falla por errores externos o validaciones. |
-| `StockReservationExpired` | Automáticamente a los 15 minutos si no se concreta el pago. |
+```text
+                          ┌───────────────────────┐
+                          │ Grupo 1 - Frontend    │
+                          └───────────┬───────────┘
+                                      │ REST/JSON
+                                      ▼
+┌──────────────────┐       ┌─────────────────────────────┐       ┌──────────────────┐
+│ Grupo 2          │◀─────▶│ Grupo 4                     │◀─────▶│ Grupo 3          │
+│ Identidad        │       │ Cart / Checkout / Inventory │       │ Catálogo         │
+└──────────────────┘       └──────────────┬──────────────┘       └──────────────────┘
+                                         │
+                         ┌───────────────┼────────────────┐
+                         │               │                │
+                         ▼               ▼                ▼
+                ┌────────────────┐ ┌──────────────┐ ┌──────────────────┐
+                │ PostgreSQL /   │ │ Grupo 6      │ │ RabbitMQ /       │
+                │ Supabase       │ │ Despacho     │ │ GCP Pub/Sub      │
+                └────────────────┘ └──────────────┘ └──────────────────┘
+```
 
-#### Eventos que NOSOTROS Consumimos 
-| Evento | Productor | Nuestra Acción Interna |
-| :--- | :---: | :--- |
-| `PaymentApproved` | **G8 (Pagos)** | Marcamos Checkout como `CONFIRMED` y Reservas como `COMPLETED`. |
-| `PaymentRejected` | **G8 (Pagos)** | Marcamos Checkout como `FAILED` y liberamos el stock (`RELEASED`). |
-| `OrderCreated` | **G5 (Pedidos)** | Asociamos el `orderId` final al registro de nuestro checkout. |
-| `ProductPriceChanged` | **G3 (Catálogo)**| Recalculamos los totales de carritos activos antes de que confirmen. |
+Para el detalle de componentes y decisiones técnicas, consulte [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
 
------------------------------------------------------------------------------------------------------------------------------------
-#INTEGRACIONES
+## Tecnologías
 
-Como el grupo se encarga ded la parte del núcleo transaccional de compra, las integraciones son con casi todos los demás grupos del entorno:
+- Python 3.10
+- FastAPI
+- Uvicorn
+- Pydantic
+- HTTPX
+- PostgreSQL / Supabase
+- asyncpg
+- RabbitMQ mediante `aio-pika`
+- Google Cloud Pub/Sub
+- Docker
 
-Grupo,Relación:
+## Estructura del repositorio
 
-Grupo 1 — Frontend,Consume nuestros endpoints /v1/cart y /v1/checkout
+```text
+.
+├── API_para_consumo.py          # Aplicación FastAPI y orquestación REST
+├── logica_negocio.py            # Persistencia y reglas transaccionales
+├── sincronizar_catalogo.py      # Sincronización inicial con Grupo 3
+├── G4pubsub.py                   # Publicación y consumo de eventos
+├── security_config.py           # Validación de secretos y utilidades de seguridad
+├── contrato-g4.yaml             # Contrato OpenAPI de referencia
+├── test_flujo.py                # Prueba funcional directa sobre la lógica
+├── Dockerfile                   # Imagen de despliegue
+├── requirements.txt             # Dependencias Python
+├── .env.example                 # Variables de entorno requeridas
+└── docs/
+    ├── API.md                    # Referencia de endpoints
+    ├── ARQUITECTURA.md           # Diseño técnico y flujo transaccional
+    ├── INTEGRACIONES.md          # Contratos con otros grupos
+    ├── DESPLIEGUE.md             # Ejecución local, Docker y producción
+    └── PRUEBAS.md                # Estrategia de validación
+```
 
-Grupo 2 — Identidad,Validamos sesiones vía POST /auth/validate
+## Requisitos previos
 
-Grupo 3 — Catálogo,Consultamos precios vía GET /v1/products/{id} y escuchamos ProductPriceChanged
+- Python 3.10 o superior.
+- PostgreSQL accesible mediante una URL de conexión.
+- Función almacenada `reserve_stock` y tablas del dominio creadas en la base de datos.
+- Credenciales de RabbitMQ cuando se publican eventos.
+- Credenciales y suscripción de Google Cloud Pub/Sub cuando se consumen eventos de pago.
+- Acceso de red a los servicios de identidad, catálogo y despacho.
 
-Grupo 5 — Pedidos,Orquestamos la creación de la orden tras el checkout
+## Configuración
 
-Grupo 7 — Inventario Físico,Consultamos stock base vía GET /v1/products/{id}/stock
+Copie el archivo de ejemplo:
 
-Grupo 8 — Pago Simulado,Escuchamos sus eventos PaymentApproved y PaymentRejected para confirmar o liberar stock
+```bash
+cp .env.example .env
+```
 
------------------------------------------------------------------------------------------------------------------------------------
-# Entorno de Pruebas (Mock API para el Grupo 1)
+Variables principales:
 
-Para no bloquear el desarrollo del Frontend, hemos desplegado un servidor Mock en Render usando Prism. Este servidor valida los contratos OpenAPI y devuelve respuestas simuladas para que puedan probar sus interfaces.
+| Variable | Obligatoria | Descripción |
+|---|---:|---|
+| `DATABASE_URL` | Sí | Cadena de conexión PostgreSQL/Supabase. |
+| `RABBITMQ_URL` | Sí para eventos | Conexión RabbitMQ; en producción debe utilizar `amqps://`. |
+| `ENVIRONMENT` | No | `local`, `development`, `test` o `production`. |
+| `URL_G3_CATALOGO` | No | URL HTTPS del catálogo del Grupo 3. |
+| `GCP_PAYMENT_PROJECT_ID` | Sí para pagos | Proyecto de Google Cloud que contiene la suscripción. |
+| `GCP_PAYMENT_SUBSCRIPTION_ID` | Sí para pagos | Suscripción a eventos del Grupo 8. |
+| `FIELD_ENCRYPTION_KEY` | Según uso | Clave Fernet para cifrado de campos sensibles. |
 
-**Base URL:** `https://api-mock-grupo4.onrender.com`
+La cuenta de servicio de Google Cloud debe estar disponible como:
 
-*Nota: Todas las peticiones deben incluir el header `Authorization: Bearer <token>` para pasar la validación de seguridad.*
+```text
+GCP_SERVICE_ACCOUNT.json
+```
 
-| Acción | Método | Endpoint | ¿Requiere Body? (JSON) |
-| :--- | :---: | :--- | :--- |
-| **Obtener carrito** | `GET` | `/v1/cart/{cartId}` | No |
-| **Agregar producto** | `POST` | `/v1/cart/{cartId}/items` | Sí (`productId`, `quantity`) |
-| **Eliminar producto** | `DELETE` | `/v1/cart/{cartId}/items/{itemId}` | No |
-| **Vaciar carrito** | `DELETE` | `/v1/cart/{cartId}` | No |
-| **Iniciar Checkout** | `POST` | `/v1/checkout` | Sí (Datos de facturación) |
-| **Consultar Checkout**| `GET` | `/v1/checkout/{checkoutId}` | No |
+Este archivo contiene secretos y **no debe versionarse**.
 
-> **Importante:** Como este servidor está en la capa gratuita de Render, si no se ha usado en 15 minutos entrará en modo reposo. La primera petición puede tardar hasta 50 segundos en responder mientras "despierta". Las siguientes serán instantáneas.
+## Instalación y ejecución local
 
-### Datos de Prueba para el Mock
+> El archivo `requirements.txt` del repositorio debe encontrarse codificado en un formato compatible con `pip`.
 
-Para probar las peticiones en este entorno simulado, utilicen los siguientes datos de ejemplo que ya están cargados en el servidor:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn API_para_consumo:app --reload --host 0.0.0.0 --port 8000
+```
 
-* **Token de Autorización válido:** `Bearer mi-token-falso-123`
-* **ID de Carrito de prueba (`cartId`):** `26f79265-51a4-9eb1-e729-81228c5ff597`
+En Windows PowerShell:
 
-**Ejemplo de URL completa para hacer un GET (Obtener carrito):**
-`https://api-mock-grupo4.onrender.com/v1/cart/26f79265-51a4-9eb1-e729-81228c5ff597`
------------------------------------------------------------------------------------------------------------------------------------
-#ESTADO DEL PROYECTO
-En desarrollo — Fase E3.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn API_para_consumo:app --reload --host 0.0.0.0 --port 8000
+```
+
+Documentación interactiva:
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+## Ejecución con Docker
+
+```bash
+docker build -t g4-cart-checkout-inventory .
+docker run --rm -p 8000:8000 --env-file .env g4-cart-checkout-inventory
+```
+
+Consulte [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) para el procedimiento completo.
+
+## Endpoints implementados
+
+### Carrito
+
+| Método | Ruta | Propósito |
+|---|---|---|
+| `POST` | `/v1/cart` | Crear un carrito. |
+| `GET` | `/v1/cart/{cart_id}` | Obtener un carrito. |
+| `POST` | `/v1/cart/{cart_id}/items` | Agregar un producto. |
+| `PUT` | `/v1/cart/{cart_id}/items/{item_id}` | Actualizar cantidad. |
+| `DELETE` | `/v1/cart/{cart_id}/items/{item_id}` | Eliminar un producto. |
+| `PATCH` | `/v1/cart/{cart_id}/activate` | Reactivar un carrito. |
+
+### Checkout
+
+| Método | Ruta | Propósito |
+|---|---|---|
+| `GET` | `/v1/checkout/{checkout_id}` | Consultar un checkout. |
+| `POST` | `/v1/cart/{cart_id}/checkout` | Iniciar el checkout del carrito. |
+| `PATCH` | `/v1/cart/{cart_id}/cancel_checkout` | Cancelar checkout y reactivar carrito. |
+
+### Inventario
+
+| Método | Ruta | Propósito |
+|---|---|---|
+| `GET` | `/v1/inventory/{product_id}` | Consultar stock total, reservado y disponible. |
+| `POST` | `/v1/stock/reservations` | Crear una reserva temporal. |
+| `DELETE` | `/v1/stock/reservations/{reservation_id}` | Liberar una reserva. |
+
+La especificación de solicitudes, respuestas y códigos de error se encuentra en [docs/API.md](docs/API.md).
+
+## Headers de integración
+
+| Header | Uso |
+|---|---|
+| `Authorization: Bearer <token>` | Identifica al usuario a través del Grupo 2. Algunos flujos admiten invitado. |
+| `X-Correlation-Id` | Correlaciona llamadas entre microservicios y registros. |
+| `X-Request-Id` | Identifica una solicitud puntual enviada a otro servicio. |
+| `X-Consumer` | Declara el microservicio consumidor. |
+
+## Estados principales
+
+### Carrito
+
+| Estado | Significado |
+|---|---|
+| `ACTIVE` | Puede ser consultado y modificado. |
+| `PENDING` | Checkout en proceso; las modificaciones quedan bloqueadas. |
+| `COMPLETED` | Compra completada tras aprobación del pago. |
+
+### Reserva
+
+| Estado | Significado |
+|---|---|
+| `ACTIVE` | Stock temporalmente reservado. |
+| `RELEASED` | Stock liberado por cancelación, rechazo o expiración. |
+| `COMPLETED` | Reserva consumida por una compra confirmada, según la operación de base de datos. |
+
+## Flujo resumido del checkout
+
+1. El cliente envía el carrito y la dirección de despacho.
+2. El servicio valida la identidad con el Grupo 2.
+3. Se obtiene el carrito y se valida que tenga productos.
+4. El estado cambia atómicamente de `ACTIVE` a `PENDING`.
+5. Se crean reservas de stock para los productos.
+6. Se consultan atributos físicos en el catálogo del Grupo 3.
+7. Se solicita una cotización al Grupo 6.
+8. Se calcula el total de productos más despacho.
+9. Se publica o continúa el proceso de pago mediante integración asíncrona.
+10. Ante error, se reactiva el carrito y se liberan las reservas aplicables.
+
+## Concurrencia e integridad
+
+La estrategia utilizada combina:
+
+- Cambio condicional de estado: `UPDATE ... WHERE status = 'ACTIVE'`.
+- Función almacenada para comprobar y reservar stock dentro de una operación controlada por la base de datos.
+- Cálculo de disponibilidad descontando reservas activas.
+- Bloqueo de actualizaciones y eliminaciones cuando el carrito no está activo.
+- Limpieza periódica de carritos pendientes abandonados.
+- Correlación de solicitudes para facilitar trazabilidad.
+
+Esto evita sobreventa y reduce el riesgo de doble procesamiento ante clics repetidos o solicitudes concurrentes.
+
+## Integraciones
+
+| Grupo / servicio | Interacción |
+|---|---|
+| Grupo 1 — Frontend | Consume carrito, checkout e inventario. |
+| Grupo 2 — Identidad | Valida tokens y entrega la identidad/roles del usuario. |
+| Grupo 3 — Catálogo | Entrega productos, precios, estado, tamaño, origen y stock visible. |
+| Grupo 6 — Despacho | Calcula alternativas y costos de envío. |
+| Grupo 8 — Pagos | Publica eventos de pago aprobados o rechazados mediante GCP Pub/Sub. |
+| RabbitMQ | Distribuye eventos producidos por el Grupo 4. |
+| Supabase/PostgreSQL | Persiste carritos, ítems, inventario y reservas. |
+
+Detalles en [docs/INTEGRACIONES.md](docs/INTEGRACIONES.md).
+
+## Pruebas
+
+La validación debe incluir, como mínimo:
+
+- Creación y consulta de carrito.
+- Agregado, modificación y eliminación de productos.
+- Rechazo de productos inexistentes o inactivos.
+- Rechazo de modificación de carritos `PENDING` o `COMPLETED`.
+- Reserva exitosa e insuficiencia de stock.
+- Dos checkouts concurrentes sobre el mismo carrito.
+- Cancelación y reactivación.
+- Aprobación y rechazo de pago.
+- Caída temporal de servicios externos.
+
+Consulte [docs/PRUEBAS.md](docs/PRUEBAS.md).
+
+## Seguridad
+
+- Los secretos se reciben por variables de entorno.
+- Los identificadores se redactan en registros mediante `redact_identifier`.
+- Las URLs externas configurables se validan como HTTPS.
+- RabbitMQ debe utilizar AMQPS en producción.
+- Los roles `admin` y `seller` no pueden utilizar carrito.
+- No se deben versionar tokens, claves, cadenas de base de datos ni cuentas de servicio.
+- La configuración CORS abierta debe restringirse a los orígenes autorizados antes de un despliegue productivo.
+- El middleware de exigencia TLS se encuentra disponible en el código, pero debe habilitarse para producción.
+
+Consulte también [DECISIONES_SEGURIDAD_G4.md](DECISIONES_SEGURIDAD_G4.md).
+
+## Observaciones del entregable
+
+- `API_para_consumo.py` representa la fuente de verdad de las rutas actualmente implementadas.
+- `contrato-g4.yaml` debe mantenerse sincronizado con la implementación antes de publicarse como contrato definitivo.
+- Las direcciones de algunos servicios externos están declaradas directamente en el código; se recomienda migrarlas completamente a variables de entorno.
+- El consumidor de GCP intenta inicializarse al importar `G4pubsub.py`; los entornos sin credenciales registrarán el error, pero la API puede continuar dependiendo de la configuración instalada.
+
+## Licencia
+
+El proyecto conserva la licencia incluida en [LICENSE](LICENSE).
+
 
 
