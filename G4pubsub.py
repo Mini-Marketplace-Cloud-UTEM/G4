@@ -63,8 +63,8 @@ async def publicar_evento(evento_dict: dict):
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "GCP_SERVICE_ACCOUNT.json"
 
 #variables para poder conectarnos al pubsub del grupo8
-PROJECT_ID = os.getenv("GCP_PAYMENT_PROJECT_ID", "project-76891426-ab92-49ba-b24")
-SUBSCRIPTION_ID = os.getenv("GCP_PAYMENT_SUBSCRIPTION_ID", "g4-payment-events-sub")
+PROJECT_ID = os.getenv("GCP_PAYMENT_PROJECT_ID")
+SUBSCRIPTION_ID = os.getenv("GCP_PAYMENT_SUBSCRIPTION_ID")
 
 async def procesar_evento_pago_g8(evento_recibido: dict):
     """Toma la decisión en la BD dependiendo de si el pago se aprobó o rechazó."""
