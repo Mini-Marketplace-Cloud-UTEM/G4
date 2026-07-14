@@ -640,8 +640,8 @@ async def checkout_cart(
                 "items": items_g5,
                 "shippingAddress": request_body.shippingAddress.model_dump(by_alias=True),
                 "notes": request_body.notes,
-                "shippingCost": costo_envio, # Inyectamos el costo de envío
-                "totalAmount": gran_total    # Inyectamos el gran total
+                "shippingCost": int (costo_envio), # Inyectamos el costo de envío
+                "totalAmount": int (gran_total)    # Inyectamos el gran total
             }
             async with httpx.AsyncClient() as client:
                 respuesta_g5 = await client.post(url_g5, json=payload_g5, headers=headers_g5, timeout=15.0)
