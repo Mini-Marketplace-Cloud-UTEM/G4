@@ -84,10 +84,9 @@ class UpdateItemRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 class CheckoutRequest(BaseModel):
-    userId: str
-    items: list
-    shippingAddress: ShippingAddressModel # Donde esta clase debe tener postal_code
-    notes: str
+    cart_id: str = Field(validation_alias=AliasChoices("cartId", "cart_id"))
+    model_config = ConfigDict(populate_by_name=True)
+
 
 class ReservationRequest(BaseModel):
     product_id: str = Field(validation_alias=AliasChoices("productId", "product_id"))
