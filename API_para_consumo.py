@@ -631,8 +631,8 @@ async def checkout_cart(
                     "product_id": item["product_id"],
                     "name": item["name"],
                     "quantity": item["quantity"],
-                    "unit_price": item["price"],
-                    "subtotal": item["subtotal"]
+                    "unit_price": int (item["price"]),
+                    "subtotal": int (item["subtotal"])
                 } for item in cart["items"]
             ]
             payload_g5 = {
