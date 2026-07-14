@@ -6,7 +6,7 @@ Microservicio transaccional del **Mini Marketplace Cloud UTEM**, responsable de 
 
 | Integrante | Rol |
 |---|---|
-| Javier Agusto | Líder de equipo |
+| Javier Agusto | LIDEL SUPLEMO |
 | Ricardo Castillo | Desarrollo e integración |
 | Ignacio Muñoz | Desarrollo e integración |
 | Jaime Orellana | Desarrollo e integración |
