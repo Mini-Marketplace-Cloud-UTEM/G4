@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 URL_G3_CATALOGO = "https://grupo-3-catalogo.onrender.com/products" 
-URL_G6_DESPACHO = " https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes"
+URL_G6_DESPACHO = "https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes"
 
 # ==========================================
 # CICLO DE VIDA DE LA API (Startup)
