@@ -9,7 +9,7 @@ from fastapi import HTTPException
 # ==========================================
 # Usamos os.getenv para que tome la variable de entorno en Render, 
 # pero le dejamos tu URL de fallback por si prueban en local.
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.etgogvgvsqepdjiuulwh:apm0xNrZAPYlvgKP@aws-1-us-west-2.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 async def get_db_connection():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -28,22 +28,30 @@ async def get_db_connection():
 
 async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
     """
-    Crea un nuevo carrito en la base de datos.
-    Si no se envía un user_id (como en el caso de los tests o invitados), 
-    se asigna el UUID de ceros por defecto para evitar errores de restricción NOT NULL.
+    Crea un nuevo carrito en la base de datos, o devuelve el existente si ya hay uno ACTIVO.
     """
     conn = await get_db_connection()
     try:
-        # Si llega un None, lo transformamos en el ID de invitado
         if not user_id:
             user_id = '00000000-0000-0000-0000-000000000000'
 
+        # 1. EL CANDADO PARA CARRITOS DUPLICADOS
+        # Solo verificamos duplicados para usuarios reales, no para el ID genérico de invitados.
+        # (Si verificamos al ID de ceros, ¡todos los invitados de la tienda compartirían el mismo carrito!)
+        if user_id != '00000000-0000-0000-0000-000000000000':
+            check_query = "SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1"
+            existing_cart = await conn.fetchval(check_query, user_id)
+            
+            if existing_cart:
+                print(f"DEBUG: El usuario {user_id} ya tenía el carrito {existing_cart} activo. Reutilizando.")
+                return str(existing_cart)
+
+        # 2. Si no tenía carrito (o es un invitado nuevo), hacemos el INSERT
         query = """
             INSERT INTO carts (user_id, status, total_amount, currency)
             VALUES ($1, 'ACTIVE', 0, 'CLP')
             RETURNING cart_id;
         """
-        # asyncpg devuelve el UUID como un objeto, lo convertimos a string
         cart_id = await conn.fetchval(query, user_id)
         return str(cart_id)
     finally:
@@ -142,12 +150,24 @@ async def recalcular_total_carrito_bd(cart_id: str):
 
 async def cerrar_pedido(cart_id: str):
     """
-    Cambia el estado del carrito de ACTIVE a PENDING (Checkout).
+    Cambia el estado del carrito de ACTIVE a PENDING de forma segura (Anti Doble-Clic).
     """
     conn = await get_db_connection()
     try:
-        query = "UPDATE carts SET status = 'PENDING' WHERE cart_id = $1"
-        await conn.execute(query, cart_id)
+        # Agregamos la condición AND status = 'ACTIVE'
+        query = "UPDATE carts SET status = 'PENDING' WHERE cart_id = $1 AND status = 'ACTIVE'"
+        
+        # asyncpg devuelve un string con el resultado, ej: "UPDATE 1" o "UPDATE 0"
+        resultado = await conn.execute(query, cart_id)
+        
+        # Si devuelve UPDATE 0, significa que la fila ya no estaba ACTIVE 
+        # (otro clic nos ganó o el carrito ya estaba pagado)
+        if resultado == "UPDATE 0":
+            raise HTTPException(
+                status_code=409, 
+                detail="El carrito ya está procesando un pago o no se encuentra activo. Por favor, espera."
+            )
+            
     finally:
         await conn.close()
 
