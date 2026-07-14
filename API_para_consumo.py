@@ -60,6 +60,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def enforce_tls(request: Request, call_next):
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if not is_request_over_tls(request.url.scheme, forwarded_proto):
+        if not should_allow_insecure_request(request.headers.get("host")):
+            return JSONResponse(
+                status_code=403,
+                content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
+            )
+    return await call_next(request)
+
 # ==========================================
 # 1. MODELOS DE DATOS 
 # ==========================================
@@ -196,9 +207,9 @@ async def create_cart(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Solicitud para crear nuevo carrito (Usuario: {user_id})")
+        logger.info(f"[{x_correlation_id}] Solicitud para crear nuevo carrito (Usuario: {redact_identifier(user_id)})")
         nuevo_cart_id = await logica_negocio.crear_carrito_bd(user_id=user_id)
-        logger.info(f"[{x_correlation_id}] Carrito {nuevo_cart_id} creado exitosamente")
+        logger.info(f"[{x_correlation_id}] Carrito {redact_identifier(nuevo_cart_id)} creado exitosamente")
         
         return {"cart_id": nuevo_cart_id, "user_id": user_id, "status": "ACTIVE", "items": [], "total_amount": 0}
         
@@ -243,7 +254,7 @@ async def get_cart(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al consultar carrito {cart_id}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error interno al consultar carrito {redact_identifier(cart_id)}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -261,7 +272,16 @@ async def add_item_to_cart(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando agregar producto {request.product_id} al carrito {cart_id}")
+        logger.info(
+            f"[{x_correlation_id}] Usuario {redact_identifier(user_id)} intentando agregar producto "
+            f"{redact_identifier(request.product_id)} al carrito {redact_identifier(cart_id)}"
+        )
+
+        # --- LA MAGIA ESTÁ AQUÍ ---
+        # Si el usuario es real (inició sesión), le asignamos el carrito inmediatamente
+        if user_id and user_id != "00000000-0000-0000-0000-000000000000":
+            await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
+        # ---------------------------
 
         # --- LA MAGIA ESTÁ AQUÍ ---
         # Si el usuario es real (inició sesión), le asignamos el carrito inmediatamente
@@ -334,7 +354,10 @@ async def add_item_to_cart(
         )
         await logica_negocio.recalcular_total_carrito_bd(cart_id)
         
-        logger.info(f"[{x_correlation_id}] Producto {request.product_id} agregado exitosamente al carrito {cart_id}")
+        logger.info(
+            f"[{x_correlation_id}] Producto {redact_identifier(request.product_id)} agregado exitosamente "
+            f"al carrito {redact_identifier(cart_id)}"
+        )
         return await logica_negocio.obtener_carrito_completo(cart_id)
         
     except HTTPException:
@@ -369,7 +392,7 @@ async def update_item_quantity(
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         
         if not resultado:
-            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al intentar actualizar.")
+            logger.warning(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} no encontrado al intentar actualizar.")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -404,7 +427,10 @@ async def remove_item_from_cart(
 ):
     """Elimina un producto específico del carrito.""" 
     try: 
-        logger.info(f"[{x_correlation_id}] Usuario {user_id} intentando eliminar: {item_id} del carrito: {cart_id}")
+        logger.info(
+            f"[{x_correlation_id}] Usuario {redact_identifier(user_id)} intentando eliminar "
+            f"{redact_identifier(item_id)} del carrito {redact_identifier(cart_id)}"
+        )
         
         # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
         await logica_negocio.eliminar_item_bd(cart_id, item_id)
@@ -412,7 +438,7 @@ async def remove_item_from_cart(
         
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         if not resultado:
-            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado tras eliminar ítem.")
+            logger.warning(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} no encontrado tras eliminar ítem.")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -428,7 +454,7 @@ async def remove_item_from_cart(
     except HTTPException:
         raise 
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al eliminar ítem {item_id}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error interno al eliminar ítem {redact_identifier(item_id)}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -479,12 +505,12 @@ async def get_checkout_status(
 ):
     """Consulta el estado de un checkout directamente en la BD."""
     try:
-        logger.info(f"[{x_correlation_id}] Consultando estado del checkout {checkout_id}")
+        logger.info(f"[{x_correlation_id}] Consultando estado del checkout {redact_identifier(checkout_id)}")
         
         checkout = await logica_negocio.obtener_checkout_bd(checkout_id)
         
         if not checkout:
-            logger.warning(f"[{x_correlation_id}] Checkout {checkout_id} no encontrado.")
+            logger.warning(f"[{x_correlation_id}] Checkout {redact_identifier(checkout_id)} no encontrado.")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -500,7 +526,7 @@ async def get_checkout_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al consultar checkout {checkout_id}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error interno al consultar checkout {redact_identifier(checkout_id)}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -762,7 +788,7 @@ async def check_inventory(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Consultando inventario para producto {product_id}")
+        logger.info(f"[{x_correlation_id}] Consultando inventario para producto {redact_identifier(product_id)}")
         resultado = await logica_negocio.consultar_inventario_bd(product_id)
         if not resultado:
             raise HTTPException(
@@ -773,12 +799,12 @@ async def check_inventory(
                     "correlation_id": x_correlation_id
                 }   
             )
-        logger.info(f"[{x_correlation_id}] Inventario para producto {product_id} consultado exitosamente")
+        logger.info(f"[{x_correlation_id}] Inventario para producto {redact_identifier(product_id)} consultado exitosamente")
         return resultado
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error al consultar inventario para producto {product_id}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error al consultar inventario para producto {redact_identifier(product_id)}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
@@ -795,14 +821,17 @@ async def reserve_stock(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Usuario {request.user_id} intentando reservar stock para producto {request.product_id} en carrito {request.cart_id}")
+        logger.info(
+            f"[{x_correlation_id}] Usuario {redact_identifier(request.user_id)} intentando reservar stock "
+            f"para producto {redact_identifier(request.product_id)} en carrito {redact_identifier(request.cart_id)}"
+        )
         
         # Llama a tu función real para insertar la reserva en Supabase
         resultado = await logica_negocio.crear_reserva_bd(
             request.product_id, request.cart_id, request.user_id, request.quantity
         )
         
-        logger.info(f"[{x_correlation_id}] Reserva de stock para producto {request.product_id} creada exitosamente")
+        logger.info(f"[{x_correlation_id}] Reserva de stock para producto {redact_identifier(request.product_id)} creada exitosamente")
         return resultado
     
     except HTTPException:
@@ -811,7 +840,7 @@ async def reserve_stock(
         mensaje_error = str(e)
         
         if "INSUFFICIENT_STOCK" in mensaje_error:
-            logger.warning(f"[{x_correlation_id}] Falló la reserva: Stock insuficiente para el producto {request.product_id}")
+            logger.warning(f"[{x_correlation_id}] Falló la reserva: Stock insuficiente para el producto {redact_identifier(request.product_id)}")
             
             fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             evento_shortage = {
@@ -866,11 +895,11 @@ async def release_stock(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Intentando liberar stock para reserva {reservation_id}")
+        logger.info(f"[{x_correlation_id}] Intentando liberar stock para reserva {redact_identifier(reservation_id)}")
         resultado = await logica_negocio.liberar_reserva_bd(reservation_id)
         
         if resultado is False:
-            logger.warning(f"[{x_correlation_id}] Reserva {reservation_id} no encontrada al intentar liberar.")
+            logger.warning(f"[{x_correlation_id}] Reserva {redact_identifier(reservation_id)} no encontrada al intentar liberar.")
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -880,13 +909,13 @@ async def release_stock(
                 }
             )
 
-        logger.info(f"[{x_correlation_id}] Stock liberado correctamente para la reserva {reservation_id}")
+        logger.info(f"[{x_correlation_id}] Stock liberado correctamente para la reserva {redact_identifier(reservation_id)}")
         return {"status": "RELEASED", "reservation_id": reservation_id, "message": "Stock liberado correctamente"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al liberar reserva {reservation_id}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error interno al liberar reserva {redact_identifier(reservation_id)}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
