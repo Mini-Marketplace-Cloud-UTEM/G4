@@ -1,32 +1,19 @@
+import os
 import json
 import logging
-from security_config import encrypt_json_field, get_required_rabbitmq_url
+import aio_pika
 
 logger = logging.getLogger(__name__)
 
-RABBITMQ_URL = get_required_rabbitmq_url()
+# Aquí pones la URL que copiaste de CloudAMQP
+# (Recuerda luego pasarla a las variables de entorno de Render)
+RABBITMQ_URL = os.getenv("RABBITMQ_URL")
 EXCHANGE_NAME = "g4_events_exchange"
-
-
-def preparar_evento_seguro(evento_dict: dict) -> dict:
-    """
-    Cifra el payload de negocio antes de publicarlo en RabbitMQ.
-    Los metadatos quedan visibles para ruteo, trazabilidad y auditoria.
-    """
-    evento_seguro = dict(evento_dict)
-    payload = evento_seguro.pop("payload", None)
-    if payload is not None:
-        evento_seguro["payloadEncrypted"] = True
-        evento_seguro["payloadEncryption"] = "fernet"
-        evento_seguro["encryptedPayload"] = encrypt_json_field(payload)
-    return evento_seguro
 
 async def publicar_evento(evento_dict: dict):
     """
-    Cifra el payload, convierte el evento a JSON y lo publica en RabbitMQ.
+    Toma el diccionario del evento, lo convierte a JSON y lo dispara a tu propio RabbitMQ.
     """
-    import aio_pika
-
     try:
         # 1. Nos conectamos a tu servidor RabbitMQ
         conexion = await aio_pika.connect_robust(RABBITMQ_URL)
@@ -47,19 +34,17 @@ async def publicar_evento(evento_dict: dict):
             await cola.bind(exchange)
             # ------------------------------------
             
-            # 4. Codificamos el evento a formato JSON estándar sin payload sensible en claro
-            evento_seguro = preparar_evento_seguro(evento_dict)
-            mensaje_bytes = json.dumps(evento_seguro).encode("utf-8")
+            # 4. Codificamos el evento a formato JSON estándar
+            mensaje_bytes = json.dumps(evento_dict).encode("utf-8")
             mensaje = aio_pika.Message(
                 body=mensaje_bytes,
-                content_type="application/json",
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+                content_type="application/json"
             )
             
             # 5. ¡Publicamos el mensaje!
             await exchange.publish(mensaje, routing_key="")
             
-            logger.info(f"Éxito: Evento {evento_dict['eventType']} publicado en RabbitMQ con payload cifrado.")
+            logger.info(f"Éxito: Evento {evento_dict['eventType']} publicado en tu RabbitMQ propio.")
             
     except Exception as e:
         logger.error(f"Error crítico al publicar en RabbitMQ: {e}")

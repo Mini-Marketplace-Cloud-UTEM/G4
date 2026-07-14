@@ -15,26 +15,12 @@ import logging
 import json
 from datetime import datetime, timezone
 import asyncio
-from security_config import (
-    get_https_service_url,
-    is_request_over_tls,
-    redact_identifier,
-    sanitize_external_error,
-    should_allow_insecure_request,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-URL_G2_AUTH_VALIDATE = get_https_service_url("URL_G2_AUTH_VALIDATE", "https://grupo2-identidadusuario.onrender.com/auth/validate")
-URL_G3_CATALOGO = get_https_service_url("URL_G3_CATALOGO", "https://grupo-3-catalogo.onrender.com/products")
-URL_G4_STOCK_RESERVATIONS = get_https_service_url(
-    "URL_G4_STOCK_RESERVATIONS",
-    "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations",
-)
-URL_G5_ORDERS = get_https_service_url("URL_G5_ORDERS", "https://grupo5-pedidos-e5fn.onrender.com/orders")
-URL_G6_DESPACHO = get_https_service_url("URL_G6_DESPACHO", "https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes")
-URL_G8_PAYMENTS = get_https_service_url("URL_G8_PAYMENTS", "https://g8-pagos-y-notificaciones.onrender.com/v1/payments")
+URL_G3_CATALOGO = "https://grupo-3-catalogo.onrender.com/products" 
+URL_G6_DESPACHO = " https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes"
 
 # ==========================================
 # CICLO DE VIDA DE LA API (Startup)
@@ -157,7 +143,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                URL_G2_AUTH_VALIDATE,
+                "https://grupo2-identidadusuario.onrender.com/auth/validate",
                 headers={"Authorization": f"Bearer {token}"}
             )
             
@@ -175,7 +161,7 @@ async def verificar_usuario_grupo2(credentials: Optional[HTTPAuthorizationCreden
                 
                 # Extraemos el ID real del usuario
                 user_id = user_info.get("id")
-                logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {redact_identifier(user_id)}")
+                logger.info(f"Sesión: USUARIO AUTENTICADO | ID: {user_id}")
                 return user_id
             else:
                 raise HTTPException(status_code=401, detail={"error_code": "UNAUTHORIZED", "message": "Token inválido o expirado según Grupo 2"})
@@ -246,7 +232,7 @@ async def get_cart(
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id") 
 ):
     try:
-        logger.info(f"[{x_correlation_id}] Usuario {redact_identifier(user_id)} consultando el carrito {redact_identifier(cart_id)}")
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} consultando el carrito {cart_id}")
         
         # MAGIA AQUÍ: Si el usuario es real (no es invitado), nos adueñamos del carrito
         if user_id and user_id != "00000000-0000-0000-0000-000000000000":
@@ -255,7 +241,7 @@ async def get_cart(
         resultado = await logica_negocio.obtener_carrito_completo(cart_id)
         
         if resultado is None:
-            logger.warning(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} no encontrado")
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -298,9 +284,15 @@ async def add_item_to_cart(
             await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
         # ---------------------------
 
+        # --- LA MAGIA ESTÁ AQUÍ ---
+        # Si el usuario es real (inició sesión), le asignamos el carrito inmediatamente
+        if user_id and user_id != "00000000-0000-0000-0000-000000000000":
+            await logica_negocio.asignar_usuario_a_carrito(cart_id, user_id)
+        # ---------------------------
+
         carro_existente = await logica_negocio.obtener_carrito_completo(cart_id)
         if not carro_existente:
-            logger.warning(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} no encontrado al agregar ítem.")
+            logger.warning(f"[{x_correlation_id}] Carrito {cart_id} no encontrado al agregar ítem.")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -312,11 +304,11 @@ async def add_item_to_cart(
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{URL_G3_CATALOGO}/{request.product_id}",
+                    f"https://grupo-3-catalogo.onrender.com/products/{request.product_id}",
                     headers={"X-Consumer": "cart-service", "X-Correlation-Id": x_correlation_id or ""}
                 )
             except httpx.RequestError:
-                logger.error(f"[{x_correlation_id}] Falla al comunicarse con Catálogo para el producto {redact_identifier(request.product_id)}")
+                logger.error(f"[{x_correlation_id}] Falla al comunicarse con Catálogo para el producto {request.product_id}")
                 raise HTTPException(
                     status_code=503, 
                     detail={
@@ -326,7 +318,7 @@ async def add_item_to_cart(
                     }
                 )
         if response.status_code == 404:
-            logger.warning(f"[{x_correlation_id}] Producto {redact_identifier(request.product_id)} no existe en catálogo.")
+            logger.warning(f"[{x_correlation_id}] Producto {request.product_id} no existe en catálogo.")
             raise HTTPException(
                 status_code=404, 
                 detail={
@@ -344,7 +336,7 @@ async def add_item_to_cart(
             producto_data = producto_json
 
         if producto_data.get("status") != "ACTIVE":
-            logger.warning(f"[{x_correlation_id}] Producto {redact_identifier(request.product_id)} inactivo.")
+            logger.warning(f"[{x_correlation_id}] Producto {request.product_id} inactivo.")
             raise HTTPException(
                 status_code=400, 
                 detail={
@@ -392,10 +384,7 @@ async def update_item_quantity(
 ):
     """Modifica la cantidad de un producto específico en el carrito."""
     try:
-        logger.info(
-            f"[{x_correlation_id}] Usuario {redact_identifier(user_id)} actualizando cantidad para el ítem "
-            f"{redact_identifier(item_id)} en el carrito {redact_identifier(cart_id)}"
-        )
+        logger.info(f"[{x_correlation_id}] Usuario {user_id} actualizando cantidad a {request.quantity} para el ítem {item_id} en el carrito {cart_id}")
         
         # FUSIONADO: Añadido el cart_id para que tu candado PENDING funcione
         await logica_negocio.actualizar_item_bd(cart_id, item_id, request.quantity)
@@ -414,13 +403,13 @@ async def update_item_quantity(
                 }
             )
             
-        logger.info(f"[{x_correlation_id}] Ítem {redact_identifier(item_id)} actualizado exitosamente")
+        logger.info(f"[{x_correlation_id}] Ítem {item_id} actualizado exitosamente")
         return resultado
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error interno al actualizar cantidad del ítem {redact_identifier(item_id)}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error interno al actualizar cantidad del ítem {item_id}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -460,7 +449,7 @@ async def remove_item_from_cart(
                 }
             )
         
-        logger.info(f"[{x_correlation_id}] Ítem {redact_identifier(item_id)} eliminado exitosamente")
+        logger.info(f"[{x_correlation_id}] Ítem {item_id} eliminado exitosamente")
         return resultado
         
     except HTTPException:
@@ -484,18 +473,18 @@ async def reactivate_cart(
 ):
     """Devuelve un carrito PENDING a estado ACTIVE si el usuario cancela el pago."""
     try:
-        logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {redact_identifier(cart_id)}")
+        logger.info(f"[{x_correlation_id}] Intentando reactivar carrito {cart_id}")
         
         # Usamos la función blindada con ::uuid
         await logica_negocio.reactivar_carrito_bd(cart_id)
         
-        logger.info(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} reactivado a ACTIVE")
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} reactivado a ACTIVE")
         return {"message": "Carrito reactivado exitosamente", "status": "ACTIVE"}
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error al reactivar carrito {redact_identifier(cart_id)}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error al reactivar carrito {cart_id}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -532,7 +521,7 @@ async def get_checkout_status(
                 }
             )
             
-        logger.info(f"[{x_correlation_id}] Checkout {redact_identifier(checkout_id)} consultado exitosamente")
+        logger.info(f"[{x_correlation_id}] Checkout {checkout_id} consultado exitosamente")
         return checkout
         
     except HTTPException:
@@ -569,7 +558,7 @@ async def checkout_cart(
     correlation_id = x_correlation_id or str(uuid.uuid4())
     
     try:
-        logger.info(f"[{correlation_id}] Orquestando checkout para carrito {redact_identifier(cart_id)}")
+        logger.info(f"[{correlation_id}] Orquestando checkout para carrito {cart_id}")
         
         # --- 1. OBTENER CARRITO ---
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
@@ -597,7 +586,7 @@ async def checkout_cart(
         async with httpx.AsyncClient() as client:
             resp_g6 = await client.post(URL_G6_DESPACHO, json=payload_g6, headers=headers_g6, timeout=15.0)
             if resp_g6.status_code != 200:
-                logger.error(f"[{correlation_id}] Error G6: {sanitize_external_error(resp_g6.text)}")
+                logger.error(f"[{correlation_id}] Error G6: {resp_g6.text}")
                 raise HTTPException(status_code=502, detail="Error al cotizar el despacho con G6.")
             costo_envio = resp_g6.json()["totalShippingCost"]["amount"]
 
@@ -611,6 +600,8 @@ async def checkout_cart(
         # ==========================================
         try:
             # --- 4. RESERVAR STOCK (G4) ---
+            url_reserva = "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations"
+            
             async with httpx.AsyncClient() as client:
                 for item in cart["items"]:
                     # Armamos el payload EXACTAMENTE como lo pide su Swagger
@@ -621,7 +612,7 @@ async def checkout_cart(
                         "quantity": item["quantity"]
                     }
                     
-                    respuesta_reserva = await client.post(URL_G4_STOCK_RESERVATIONS, json=payload_reserva, timeout=15.0)
+                    respuesta_reserva = await client.post(url_reserva, json=payload_reserva, timeout=15.0)
                     
                     if respuesta_reserva.status_code in (400, 409):
                         raise HTTPException(status_code=409, detail=f"No hay stock suficiente para el producto {item['product_id']}.")
@@ -629,6 +620,7 @@ async def checkout_cart(
                         raise HTTPException(status_code=502, detail="Error al comunicarse con el servicio de inventario.")
 
             # --- 5. LLAMAR A G5 (PEDIDOS) ---
+            url_g5 = "https://grupo5-pedidos-e5fn.onrender.com/orders"
             headers_g5 = {
                 "Idempotency-Key": str(uuid.uuid4()),
                 "X-Correlation-Id": correlation_id,
@@ -646,20 +638,20 @@ async def checkout_cart(
             payload_g5 = {
                 "userId": user_id,
                 "items": items_g5,
-                # En transito via HTTPS. Si G4 persiste estos campos, usar encrypt_json_field/encrypt_field.
                 "shippingAddress": request_body.shippingAddress.model_dump(by_alias=True),
                 "notes": request_body.notes,
                 "shippingCost": costo_envio, # Inyectamos el costo de envío
                 "totalAmount": gran_total    # Inyectamos el gran total
             }
             async with httpx.AsyncClient() as client:
-                respuesta_g5 = await client.post(URL_G5_ORDERS, json=payload_g5, headers=headers_g5, timeout=15.0)
+                respuesta_g5 = await client.post(url_g5, json=payload_g5, headers=headers_g5, timeout=15.0)
                 if respuesta_g5.status_code not in (200, 201):
-                    logger.error(f"[{correlation_id}] Error G5: {sanitize_external_error(respuesta_g5.text)}")
+                    logger.error(f"[{correlation_id}] Error G5: {respuesta_g5.text}")
                     raise HTTPException(status_code=502, detail="Error al crear el pedido en G5")
                 order_id = respuesta_g5.json().get("orderId")
 
             # --- 6. LLAMAR A G8 (PAGOS) ---
+            url_g8 = "https://g8-pagos-y-notificaciones.onrender.com/v1/payments"
             headers_g8 = {
                 "Idempotency-Key": str(uuid.uuid4()),
                 "Authorization": f"Bearer {token.credentials}" if token else "",
@@ -673,9 +665,9 @@ async def checkout_cart(
                 "method": "MERCADOPAGO"
             }
             async with httpx.AsyncClient() as client:
-                respuesta_g8 = await client.post(URL_G8_PAYMENTS, json=payload_g8, headers=headers_g8, timeout=15.0)
+                respuesta_g8 = await client.post(url_g8, json=payload_g8, headers=headers_g8, timeout=15.0)
                 if respuesta_g8.status_code not in (200, 201):
-                    logger.error(f"[{correlation_id}] Error G8: {sanitize_external_error(respuesta_g8.text)}")
+                    logger.error(f"[{correlation_id}] Error G8: {respuesta_g8.text}")
                     raise HTTPException(status_code=502, detail="Error al iniciar el pago en G8")
                 datos_pago = respuesta_g8.json()
 
@@ -713,7 +705,7 @@ async def complete_checkout(
 ):
     """Marca el carrito como COMPLETED definitivo tras confirmar el pago."""
     try:
-        logger.info(f"[{x_correlation_id}] Confirmando pago y cerrando carrito {redact_identifier(cart_id)} a COMPLETED")
+        logger.info(f"[{x_correlation_id}] Confirmando pago y cerrando carrito {cart_id} a COMPLETED")
         
         # 1. Verificamos que el carrito exista
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
@@ -726,13 +718,13 @@ async def complete_checkout(
         # 2. Pasamos el estado a COMPLETED en la BD
         await logica_negocio.completar_pedido_bd(cart_id)
         
-        logger.info(f"[{x_correlation_id}] Carrito {redact_identifier(cart_id)} completado con éxito")
+        logger.info(f"[{x_correlation_id}] Carrito {cart_id} completado con éxito")
         return {"message": "Pago confirmado, carrito cerrado exitosamente", "status": "COMPLETED"}
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error al completar carrito {redact_identifier(cart_id)}: {str(e)}")
+        logger.error(f"[{x_correlation_id}] Error al completar carrito {cart_id}: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail={
@@ -752,7 +744,7 @@ async def cancel_checkout(
     2. Devuelve el carrito al estado ACTIVE.
     """
     try:
-        logger.info(f"[{x_correlation_id}] Cancelando checkout para carrito {redact_identifier(cart_id)}")
+        logger.info(f"[{x_correlation_id}] Cancelando checkout para carrito {cart_id}")
         
         cart = await logica_negocio.obtener_carrito_completo(cart_id)
         if not cart:
@@ -760,20 +752,22 @@ async def cancel_checkout(
 
         # 1. Llamar al DELETE de Inventario para liberar el stock
         # Asumimos que la URL base de tu inventario es esta (¡Cámbiala si es otra!)
+        url_inventario_base = "https://g4-carrito-checkout-inventario-y.onrender.com/v1/stock/reservations"
+        
         # Opcional: Si en tu base de datos guardaste un reservation_id, lo usas. 
         # Si tu sistema usa el mismo cart_id como ID de reserva (muy común), mandamos el cart_id.
         reserva_id = cart_id 
         
         async with httpx.AsyncClient() as client:
-            respuesta_inv = await client.delete(f"{URL_G4_STOCK_RESERVATIONS}/{reserva_id}")
+            respuesta_inv = await client.delete(f"{url_inventario_base}/{reserva_id}")
             if respuesta_inv.status_code not in (200, 204):
-                logger.warning(f"[{x_correlation_id}] No se pudo liberar stock o no había reserva activa: {sanitize_external_error(respuesta_inv.text)}")
+                logger.warning(f"[{x_correlation_id}] No se pudo liberar stock o no había reserva activa: {respuesta_inv.text}")
                 # No lanzamos error para no bloquear al usuario, pero lo logueamos
 
         # 2. Devolver el carrito a ACTIVE
         await logica_negocio.reactivar_carrito_bd(cart_id)
         
-        logger.info(f"[{x_correlation_id}] Checkout cancelado. Carrito {redact_identifier(cart_id)} vuelve a ACTIVE.")
+        logger.info(f"[{x_correlation_id}] Checkout cancelado. Carrito {cart_id} vuelve a ACTIVE.")
         return {
             "message": "Checkout cancelado. Los productos han sido devueltos a la tienda.",
             "status": "ACTIVE"
@@ -864,10 +858,7 @@ async def reserve_stock(
                     "occurredAt": fecha_actual
                 }
             }
-            print(
-                "Publicando evento InventoryShortage para G7:",
-                json.dumps({**evento_shortage, "payload": {"productId": redact_identifier(request.product_id)}}, indent=2),
-            )
+            print("Publicando evento para G7:", json.dumps(evento_shortage, indent=2))
             
             raise HTTPException(
                 status_code=409, 
