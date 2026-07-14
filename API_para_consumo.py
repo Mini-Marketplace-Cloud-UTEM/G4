@@ -16,7 +16,7 @@ import logging
 import json
 from datetime import datetime, timezone
 import asyncio
-
+from security_config import redact_identifier
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -62,18 +62,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# *OJO que render ya hace HTTPS, así que no necesitamos forzar TLS en el codigo lo comentare por que igual tengo que probarlo en local xD
-@app.middleware("http")
-async def enforce_tls(request: Request, call_next):
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    if not is_request_over_tls(request.url.scheme, forwarded_proto):
-        if not should_allow_insecure_request(request.headers.get("host")):
-            return JSONResponse(
-                status_code=403,
-                content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
-            )
-    return await call_next(request)
+#@app.middleware("http")
+#async def enforce_tls(request: Request, call_next):
+ #   forwarded_proto = request.headers.get("x-forwarded-proto")
+  #  if not is_request_over_tls(request.url.scheme, forwarded_proto):
+   #     if not should_allow_insecure_request(request.headers.get("host")):
+    #        return JSONResponse(
+     #           status_code=403,
+      #          content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
+       #     )
+    #return await call_next(request)
 
 
 # ==========================================
@@ -91,6 +89,7 @@ class UpdateItemRequest(BaseModel):
 class CheckoutRequest(BaseModel):
     cart_id: str = Field(validation_alias=AliasChoices("cartId", "cart_id"))
     model_config = ConfigDict(populate_by_name=True)
+
 
 class ReservationRequest(BaseModel):
     product_id: str = Field(validation_alias=AliasChoices("productId", "product_id"))
@@ -665,7 +664,7 @@ async def checkout_cart(
             payload_g8 = {
                 "orderId": order_id, 
                 "userId": user_id,
-                "amount": int(gran_total), # Cobramos el Gran Total
+                "amount": int (gran_total), # Cobramos el Gran Total
                 "currency": "CLP",
                 "method": "MERCADOPAGO"
             }
@@ -683,8 +682,8 @@ async def checkout_cart(
                 "status": "PENDING_PAYMENT",
                 "orderId": order_id,
                 "paymentUrl": datos_pago.get("checkoutUrl"),
-                "shippingCost": costo_envio,
-                "totalAmount": gran_total
+                "shippingCost": int (costo_envio),
+                "totalAmount": int (gran_total)
             }
 
         except Exception as internal_error:

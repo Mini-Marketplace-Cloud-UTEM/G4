@@ -9,7 +9,7 @@ DATABASE_URL = get_required_database_url()
 URL_G3_CATALOGO = get_https_service_url("URL_G3_CATALOGO", "https://grupo-3-catalogo.onrender.com/products")
 
 async def get_db_connection():
-    conn = await asyncpg.connect(DATABASE_URL, ssl=True)
+    conn = await asyncpg.connect(DATABASE_URL, ssl=False)
     await conn.set_type_codec('uuid', encoder=str, decoder=str, schema='pg_catalog')
     return conn
 
