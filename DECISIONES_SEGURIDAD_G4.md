@@ -99,3 +99,4 @@ Controles que deben configurarse fuera del código:
 - Cifrado en reposo del proyecto Supabase.
 - Secret manager/variables protegidas en Render o plataforma equivalente.
 - Rotación de secretos si ya fueron compartidos.
+
