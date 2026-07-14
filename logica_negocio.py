@@ -1,16 +1,18 @@
 import asyncpg
+import os
 import json
 from typing import Optional
 from fastapi import HTTPException
-from security_config import get_required_database_url, redact_identifier
 
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SUPABASE)
 # ==========================================
-DATABASE_URL = get_required_database_url()
+# Usamos os.getenv para que tome la variable de entorno en Render, 
+# pero le dejamos tu URL de fallback por si prueban en local.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 async def get_db_connection():
-    conn = await asyncpg.connect(DATABASE_URL, ssl=True)
+    conn = await asyncpg.connect(DATABASE_URL)
     # Esto le enseña a tu conexión a manejar los UUID de forma nativa
     await conn.set_type_codec(
         'uuid',
@@ -41,7 +43,7 @@ async def crear_carrito_bd(user_id: Optional[str] = None) -> str:
             existing_cart = await conn.fetchval(check_query, user_id)
             
             if existing_cart:
-                print(f"DEBUG: Usuario {redact_identifier(user_id)} reutiliza carrito {redact_identifier(existing_cart)} activo.")
+                print(f"DEBUG: El usuario {user_id} ya tenía el carrito {existing_cart} activo. Reutilizando.")
                 return str(existing_cart)
 
         # 2. Si no tenía carrito (o es un invitado nuevo), hacemos el INSERT
@@ -181,7 +183,7 @@ async def asignar_usuario_a_carrito(cart_id: str, user_id: str):
             AND (user_id IS NULL OR user_id = '00000000-0000-0000-0000-000000000000')
         """
         resultado = await conn.execute(query, user_id, cart_id)
-        print(f"DEBUG Asignación: {resultado} para el carrito {redact_identifier(cart_id)}")
+        print(f"DEBUG Asignación: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
         
@@ -197,7 +199,7 @@ async def reactivar_carrito_bd(cart_id: str):
             WHERE cart_id = $1 AND status = 'PENDING'
         """
         resultado = await conn.execute(query, cart_id)
-        print(f"DEBUG Reactivación: {resultado} para el carrito {redact_identifier(cart_id)}")
+        print(f"DEBUG Reactivación: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
 async def actualizar_item_bd(cart_id: str, item_id: str, quantity: int):
@@ -340,7 +342,7 @@ async def completar_pedido_bd(cart_id: str):
     try:
         query = "UPDATE carts SET status = 'COMPLETED' WHERE cart_id = $1"
         resultado = await conn.execute(query, cart_id)
-        print(f"DEBUG Pago Exitoso: {resultado} para el carrito {redact_identifier(cart_id)}")
+        print(f"DEBUG Pago Exitoso: {resultado} para el carrito {cart_id}")
     finally:
         await conn.close()
 
@@ -365,7 +367,7 @@ async def limpiar_carritos_huerfanos_bd():
         if carritos_rescatados:
             for row in carritos_rescatados:
                 cart_id = str(row['cart_id'])
-                print(f"INFO TTL: Liberando carrito huérfano {redact_identifier(cart_id)}")
+                print(f"INFO TTL: Liberando carrito huérfano {cart_id}")
                 
                 query_reservas = """
                     UPDATE stock_reservations
