@@ -660,7 +660,7 @@ async def checkout_cart(
             payload_g8 = {
                 "orderId": order_id, 
                 "userId": user_id,
-                "amount": gran_total, # Cobramos el Gran Total
+                "amount": int (gran_total), # Cobramos el Gran Total
                 "currency": "CLP",
                 "method": "MERCADOPAGO"
             }
@@ -678,8 +678,8 @@ async def checkout_cart(
                 "status": "PENDING_PAYMENT",
                 "orderId": order_id,
                 "paymentUrl": datos_pago.get("checkoutUrl"),
-                "shippingCost": costo_envio,
-                "totalAmount": gran_total
+                "shippingCost": int (costo_envio),
+                "totalAmount": int (gran_total)
             }
 
         except Exception as internal_error:
