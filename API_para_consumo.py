@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 from typing import List, Optional
-import G4pubsub
+import G4pubsub # type: ignore
+from security_config import redact_identifier, is_request_over_tls, should_allow_insecure_request
 from sincronizar_catalogo import sincronizar_catalogo_inicial 
 import uuid
 from uuid import UUID
@@ -19,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 URL_G3_CATALOGO = "https://grupo-3-catalogo.onrender.com/products" 
-URL_G6_DESPACHO = " https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes"
+URL_G6_DESPACHO = "https://g6-despacho-oficial.onrender.com/api/v1/shipments/quotes"
 
 # ==========================================
 # CICLO DE VIDA DE LA API (Startup)
@@ -60,6 +62,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# *OJO que render ya hace HTTPS, así que no necesitamos forzar TLS en el codigo lo comentare por que igual tengo que probarlo en local xD
 @app.middleware("http")
 async def enforce_tls(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto")
@@ -70,6 +74,7 @@ async def enforce_tls(request: Request, call_next):
                 content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
             )
     return await call_next(request)
+
 
 # ==========================================
 # 1. MODELOS DE DATOS 
@@ -121,6 +126,7 @@ class ShippingAddress(BaseModel):
 class CheckoutPayload(BaseModel):
     shippingAddress: ShippingAddress
     notes: Optional[str] = ""
+
 ### ==========================================
 ### 2. DEPENDENCIA DE AUTENTICACIÓN (GRUPO 2)
 ### ==========================================
@@ -630,8 +636,8 @@ async def checkout_cart(
                     "product_id": item["product_id"],
                     "name": item["name"],
                     "quantity": item["quantity"],
-                    "unit_price": item["price"],
-                    "subtotal": item["subtotal"]
+                    "unit_price": int (item["price"]),
+                    "subtotal": int (item["subtotal"])
                 } for item in cart["items"]
             ]
             payload_g5 = {
@@ -639,8 +645,8 @@ async def checkout_cart(
                 "items": items_g5,
                 "shippingAddress": request_body.shippingAddress.model_dump(by_alias=True),
                 "notes": request_body.notes,
-                "shippingCost": costo_envio, # Inyectamos el costo de envío
-                "totalAmount": gran_total    # Inyectamos el gran total
+                "shippingCost": int (costo_envio), # Inyectamos el costo de envío
+                "totalAmount": int (gran_total)    # Inyectamos el gran total
             }
             async with httpx.AsyncClient() as client:
                 respuesta_g5 = await client.post(url_g5, json=payload_g5, headers=headers_g5, timeout=15.0)
@@ -659,7 +665,7 @@ async def checkout_cart(
             payload_g8 = {
                 "orderId": order_id, 
                 "userId": user_id,
-                "amount": gran_total, # Cobramos el Gran Total
+                "amount": int(gran_total), # Cobramos el Gran Total
                 "currency": "CLP",
                 "method": "MERCADOPAGO"
             }
@@ -696,41 +702,6 @@ async def checkout_cart(
             pass
         raise HTTPException(status_code=500, detail="Error interno durante el orquestado de checkout")
 #Esto le falta al QA. Debo agregarlo
-@app.patch("/v1/cart/{cart_id}/complete", tags=["Checkout"])
-async def complete_checkout(
-    cart_id: str,
-    user_id: Optional[str] = Depends(verificar_usuario_grupo2),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-Id")
-):
-    """Marca el carrito como COMPLETED definitivo tras confirmar el pago."""
-    try:
-        logger.info(f"[{x_correlation_id}] Confirmando pago y cerrando carrito {cart_id} a COMPLETED")
-        
-        # 1. Verificamos que el carrito exista
-        cart = await logica_negocio.obtener_carrito_completo(cart_id)
-        if not cart:
-            raise HTTPException(
-                status_code=404, 
-                detail={"error_code": "CART_NOT_FOUND", "message": "Carrito no encontrado"}
-            )
-            
-        # 2. Pasamos el estado a COMPLETED en la BD
-        await logica_negocio.completar_pedido_bd(cart_id)
-        
-        logger.info(f"[{x_correlation_id}] Carrito {cart_id} completado con éxito")
-        return {"message": "Pago confirmado, carrito cerrado exitosamente", "status": "COMPLETED"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[{x_correlation_id}] Error al completar carrito {cart_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail={
-                "error_code": "INTERNAL_SERVER_ERROR",
-                "message": "Error interno al cerrar el pedido."
-            }
-        )
 @app.patch("/v1/cart/{cart_id}/cancel_checkout", tags=["Checkout"])
 async def cancel_checkout(
     cart_id: str, 
@@ -924,58 +895,6 @@ async def release_stock(
                 "correlation_id": x_correlation_id
             }
         )
-
-### ==========================================
-### 6. CONSUMIDOR DE EVENTOS (PUB/SUB)
-### ==========================================
-async def procesar_evento_pago_g8(evento_recibido: dict):
-    """
-    Esta función actuará como consumidor. Será llamada automáticamente 
-    cuando el Bus de Eventos nos entregue un mensaje del Grupo 8.
-    """
-    tipo_evento = evento_recibido.get("eventType")
-    correlation_id = evento_recibido.get("correlationId", str(uuid.uuid4()))
-    fecha_actual = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    
-    if tipo_evento == "PAYMENT_APPROVED":
-        # 1. Aquí irá la lógica BD: await logica_negocio.confirmar_checkout(...)
-        
-        # --- ARMAMOS NUESTRO EVENTO: CheckoutConfirmed ---
-        evento_confirmed = {
-            "eventId": str(uuid.uuid4()),
-            "eventType": "CheckoutConfirmed",
-            "version": "1.0",
-            "occurredAt": fecha_actual,
-            "producer": "g4-checkout",
-            "correlationId": correlation_id,
-            "payload": {
-                "orderId": evento_recibido.get("payload", {}).get("orderId"),
-                "status": "CONFIRMED",
-                "message": "El pago fue aprobado y el checkout se ha cerrado exitosamente."
-            }
-        }
-        await G4pubsub.publicar_evento(evento_confirmed)
-        
-    elif tipo_evento == "PAYMENT_REJECTED":
-        # 1. Aquí irá la lógica BD: await logica_negocio.fallar_checkout(...)
-        # 2. Aquí irá la lógica BD: await logica_negocio.liberar_reserva_bd(...)
-        
-        # --- ARMAMOS NUESTRO EVENTO: CheckoutFailed ---
-        evento_failed = {
-            "eventId": str(uuid.uuid4()),
-            "eventType": "CheckoutFailed",
-            "version": "1.0",
-            "occurredAt": fecha_actual,
-            "producer": "g4-checkout",
-            "correlationId": correlation_id,
-            "payload": {
-                "orderId": evento_recibido.get("payload", {}).get("orderId"),
-                "status": "FAILED",
-                "reason": "Pago rechazado por el banco (G8)",
-                "action": "Inventory released"
-            }
-        }
-        await G4pubsub.publicar_evento(evento_failed)
 
 async def tarea_ttl_carritos():
     """Ciclo infinito que corre en segundo plano cada 5 minutos."""
