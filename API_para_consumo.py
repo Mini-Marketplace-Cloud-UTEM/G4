@@ -60,16 +60,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.middleware("http")
-async def enforce_tls(request: Request, call_next):
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    if not is_request_over_tls(request.url.scheme, forwarded_proto):
-        if not should_allow_insecure_request(request.headers.get("host")):
-            return JSONResponse(
-                status_code=403,
-                content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
-            )
-    return await call_next(request)
+#@app.middleware("http")
+#async def enforce_tls(request: Request, call_next):
+ #   forwarded_proto = request.headers.get("x-forwarded-proto")
+  #  if not is_request_over_tls(request.url.scheme, forwarded_proto):
+   #     if not should_allow_insecure_request(request.headers.get("host")):
+    #        return JSONResponse(
+     #           status_code=403,
+      #          content={"error_code": "TLS_REQUIRED", "message": "La API requiere HTTPS."},
+       #     )
+    #return await call_next(request)
 
 # ==========================================
 # 1. MODELOS DE DATOS 
