@@ -14,7 +14,7 @@ import logging
 import json
 from datetime import datetime, timezone
 import asyncio
-
+from security_config import redact_identifier
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
